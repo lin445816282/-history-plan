@@ -14,6 +14,7 @@
         <button class="btn primary" :disabled="deducing" @click="startDeduce">
           {{ deducing ? '推演中…' : '🔮 开始推演' }}
         </button>
+        <button class="btn ghost" @click="$router.push(`/profile/${profile.id}/growth`)">📈 成长追踪</button>
         <button class="btn ghost" @click="compareOpen = !compareOpen">⚖️ 对比推演</button>
         <button class="btn ghost" @click="viewMode = viewMode === 'view' ? 'edit' : 'view'">
           {{ viewMode === 'view' ? '✏️ 编辑' : '完成' }}

@@ -165,6 +165,47 @@ export async function getDeviationSummary() {
   return summary
 }
 
+// ---------- 人物成长追踪 ----------
+export async function getGrowthData(profileId) {
+  const [reviews, todos] = await Promise.all([
+    db.getByIndex('reviews', 'by_profileId', profileId),
+    db.getByIndex('todos', 'by_profileId', profileId),
+  ])
+  reviews.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+
+  const points = reviews.map(r => {
+    const dr = r.deviationReport || {}
+    const acc = (dr.accurate || []).length
+    const dev = (dr.deviated || []).length
+    const total = acc + dev
+    return {
+      id: r.id,
+      createdAt: r.createdAt,
+      accurate: acc,
+      deviated: dev,
+      rate: total ? Math.round(acc / total * 100) : null,
+      reasons: (dr.deviated || []).map(d => d && d.reason).filter(Boolean),
+    }
+  })
+
+  const todoTotal = todos.length
+  const todoDone = todos.filter(t => t.status === 'completed').length
+  const rated = points.filter(p => p.rate != null)
+
+  return {
+    totalReviews: reviews.length,
+    totalAccurate: points.reduce((s, p) => s + p.accurate, 0),
+    totalDeviated: points.reduce((s, p) => s + p.deviated, 0),
+    latestRate: rated.length ? rated[rated.length - 1].rate : null,
+    firstRate: rated.length ? rated[0].rate : null,
+    trend: rated.length >= 2 ? (rated[rated.length - 1].rate - rated[0].rate) : 0,
+    points,
+    todoTotal,
+    todoDone,
+    todoRate: todoTotal ? Math.round(todoDone / todoTotal * 100) : 0,
+  }
+}
+
 // ---------- 备份 ----------
 export const exportAllData = () => db.exportAllData()
 export const importAllData = (data) => db.importAllData(data)
@@ -173,5 +214,5 @@ export default {
   listProfiles, getProfile, createProfile, updateProfile, duplicateProfile, deleteProfile,
   listSnapshots, getSnapshot, saveSnapshot,
   listTodos, saveTodo, updateTodo, deleteTodo,
-  listReviews, saveReview, getDeviationSummary, exportAllData, importAllData,
+  listReviews, saveReview, getDeviationSummary, getGrowthData, exportAllData, importAllData,
 }
