@@ -53,6 +53,10 @@
           </select>
         </div>
       </div>
+      <div class="pred-correct">
+        <label class="corr-label">✏️ 补充修正（可选）：对上述判定进行人工修正</label>
+        <textarea v-model="form.userCorrection" class="input" rows="3" placeholder="对偏差分析的补充说明或修正…"></textarea>
+      </div>
     </div>
 
     <div class="actions">
@@ -70,7 +74,7 @@ const route = useRoute()
 const router = useRouter()
 const snapshot = ref(null)
 const report = ref(null)
-const form = reactive({ actualEvents: '', humanFactors: '', externalFactors: '', selfCompassion: '' })
+const form = reactive({ actualEvents: '', humanFactors: '', externalFactors: '', selfCompassion: '', userCorrection: '' })
 
 const predictions = ref([])
 
@@ -104,7 +108,7 @@ async function save() {
   const deviationReport = {
     accurate: predictions.value.filter(p => p.status === 'accurate').map(p => p.text),
     deviated: predictions.value.filter(p => p.status === 'deviated').map(p => ({ item: p.text, reason: p.reason || '未注明原因' })),
-    userCorrection: '',
+    userCorrection: form.userCorrection,
   }
   const now = new Date().toISOString()
   await saveReview({
@@ -144,6 +148,8 @@ onMounted(load)
 .pred-controls { display: flex; align-items: center; gap: var(--sp-md); flex-wrap: wrap; }
 .radio { display: flex; align-items: center; gap: var(--sp-xs); font-size: var(--fs-small); cursor: pointer; }
 .reason-select { padding: var(--sp-xs); font-size: var(--fs-small); border: 1px solid var(--color-neutral-300); border-radius: var(--radius-sm); }
+.pred-correct { margin-top: var(--sp-md); border-top: 1px dashed var(--color-neutral-200); padding-top: var(--sp-md); }
+.corr-label { display: block; font-size: var(--fs-small); color: var(--color-neutral-700); margin-bottom: var(--sp-xs); }
 .actions { display: flex; justify-content: flex-end; }
 .btn { padding: var(--sp-sm) var(--sp-xl); border: none; border-radius: var(--radius-md); font-size: var(--fs-body); }
 .btn.ghost { background: var(--color-primary-500); color: #fff; }

@@ -10,6 +10,10 @@
         placeholder="例如：我是做电商的，28岁，在杭州，想扩大规模但资金不足，性格有点急躁，家里能帮一点忙但不多，去年踩过坑亏了一笔…"
       ></textarea>
       <p class="hint">💡 建议补充：心性取舍、遇事抉择倾向、过往关键抉择</p>
+      <div class="templates">
+        <span class="tpl-label">📋 场景模板：</span>
+        <button v-for="t in TEMPLATES" :key="t.key" class="tpl-btn" @click="applyTemplate(t)">{{ t.label }}</button>
+      </div>
       <div class="actions">
         <button class="btn ghost" @click="$router.back()">取消</button>
         <button class="btn primary" :disabled="loading" @click="parse">
@@ -64,6 +68,28 @@ const text = ref('')
 const loading = ref(false)
 const form = reactive(emptyProfile())
 
+const TEMPLATES = [
+  {
+    key: 'career',
+    label: '💼 职场转型',
+    text: '我今年30岁，在北京做程序员，工作8年，年薪40万。想转行做产品经理，但担心年龄偏大、没有相关经验。性格偏内向，不太擅长表达和争取。家里条件一般，父母帮不上太多忙。目前存款30万。最大的顾虑是转行初期收入会明显下降。',
+  },
+  {
+    key: 'startup',
+    label: '🚀 创业起步',
+    text: '我28岁，在杭州做电商运营，工作5年，存款25万。想自己创业开网店卖家居用品，但担心资金不够、竞争激烈。性格有点急躁，容易冲动。去年跟朋友合伙做过一次小生意亏了5万。家里能帮一点但不多。希望今年能把店开起来。',
+  },
+  {
+    key: 'study',
+    label: '🎓 学业规划',
+    text: '我孩子今年10岁，上小学四年级，成绩中等偏上，但注意力不集中，写作业拖拉。想给他规划小升初，纠结是走竞赛路线还是稳扎稳打。家里经济条件一般，能投入的课外辅导费有限。希望找到一条适合他的学习成长路径。',
+  },
+]
+
+function applyTemplate(t) {
+  text.value = t.text
+}
+
 async function parse() {
   if (!text.value.trim()) { alert('请先输入描述'); return }
   loading.value = true
@@ -104,6 +130,10 @@ async function save() {
 .field-input.big { min-height: 160px; }
 .field-input:focus { outline: none; border-color: var(--color-primary-500); }
 .hint { font-size: var(--fs-caption); color: var(--color-neutral-500); }
+.templates { display: flex; align-items: center; gap: var(--sp-xs); flex-wrap: wrap; }
+.tpl-label { font-size: var(--fs-caption); color: var(--color-neutral-500); }
+.tpl-btn { padding: var(--sp-xs) var(--sp-sm); border: 1px solid var(--color-secondary-300, #C4C4C4); background: var(--color-secondary-100, #E8EEF5); color: var(--color-secondary-500, #4A6A8B); border-radius: var(--radius-md); font-size: var(--fs-caption); cursor: pointer; }
+.tpl-btn:hover { border-color: var(--color-secondary-500, #4A6A8B); }
 .group { border-top: 1px solid var(--color-neutral-100); padding-top: var(--sp-md); }
 .group-title { font-size: var(--fs-small); color: var(--color-neutral-700); margin-bottom: var(--sp-sm); }
 .field { display: flex; flex-direction: column; gap: var(--sp-xs); margin-bottom: var(--sp-sm); }
