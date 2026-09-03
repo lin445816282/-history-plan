@@ -16,13 +16,19 @@
 
     <!-- 后端状态 -->
     <div class="block">
-      <h3>推演引擎状态</h3>
+      <h3>推演引擎（模型选择）</h3>
+      <div class="model-select">
+        <label v-for="(p, key) in providers" :key="key" class="model-opt" :class="{ active: selectedProvider === key }">
+          <input type="radio" name="provider" :value="key" :checked="selectedProvider === key" @change="chooseProvider(key)" />
+          <span class="model-name">{{ p.name }}</span>
+          <span class="model-tag">{{ p.model }}</span>
+          <span v-if="!p.configured" class="model-unconfigured">未配置Key</span>
+        </label>
+      </div>
       <div v-if="healthInfo" class="health">
         <div class="health-row"><span class="k">状态</span><span class="v" :class="healthInfo.status === 'ok' ? 'ok' : 'bad'">{{ healthInfo.status === 'ok' ? '正常' : '异常' }}</span></div>
-        <div class="health-row"><span class="k">模型</span><span class="v">{{ healthInfo.model }}</span></div>
         <div class="health-row"><span class="k">提示词版本</span><span class="v">{{ healthInfo.prompt_version }}</span></div>
         <div class="health-row"><span class="k">知识库版本</span><span class="v">{{ healthInfo.knowledge_version }}</span></div>
-        <div class="health-row"><span class="k">API Key</span><span class="v">{{ healthInfo.api_key_configured ? '已配置' : '未配置' }}</span></div>
       </div>
       <p v-else class="hint">正在检测…</p>
     </div>
@@ -42,13 +48,21 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { exportAllData, importAllData } from '../services/profile-service.js'
-import { health } from '../api/index.js'
+import { health, getProvider, setProvider } from '../api/index.js'
 
 const fileInput = ref(null)
 const lastMsg = ref('')
 const healthInfo = ref(null)
+const selectedProvider = ref(getProvider())
+const providers = computed(() => healthInfo.value?.providers || {})
+
+function chooseProvider(key) {
+  selectedProvider.value = key
+  setProvider(key)
+  lastMsg.value = `已切换模型，下次推演/解析将使用 ${providers.value[key]?.name || key}。`
+}
 
 function fmtDate(d) {
   const p = n => String(n).padStart(2, '0')
@@ -117,6 +131,12 @@ onMounted(async () => {
 .btn.ghost { background: #fff; border: 1px solid var(--color-neutral-300); color: var(--color-neutral-700); }
 .msg { font-size: var(--fs-small); color: var(--color-info); }
 .health { display: flex; flex-direction: column; gap: var(--sp-xs); }
+.model-select { display: flex; flex-direction: column; gap: var(--sp-sm); margin-bottom: var(--sp-md); }
+.model-opt { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); border: 1px solid var(--color-neutral-300); border-radius: var(--radius-md); cursor: pointer; }
+.model-opt.active { border-color: var(--color-primary-500); background: var(--color-primary-50); }
+.model-name { font-size: var(--fs-small); font-weight: 600; color: var(--color-neutral-900); }
+.model-tag { font-size: var(--fs-caption); color: var(--color-neutral-500); }
+.model-unconfigured { font-size: var(--fs-caption); color: var(--color-error); }
 .health-row { display: flex; gap: var(--sp-md); font-size: var(--fs-small); }
 .health-row .k { width: 90px; color: var(--color-neutral-500); }
 .health-row .v { color: var(--color-neutral-900); }

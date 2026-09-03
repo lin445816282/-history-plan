@@ -39,6 +39,10 @@
     <div class="block">
       <h3>推演偏差自检报告</h3>
       <p class="hint">对比推演时的三条关键预测与你的现实情况，逐条判断「准确」或「偏差」。</p>
+      <div class="ai-row">
+        <button class="btn ai" :disabled="aiLoading" @click="aiAnalyze">{{ aiLoading ? '🤖 AI 分析中…' : '🤖 AI 帮我分析' }}</button>
+        <span v-if="aiAnalysis" class="ai-result">{{ aiAnalysis }}</span>
+      </div>
       <div v-for="(p, i) in predictions" :key="i" class="pred-item">
         <div class="pred-text">{{ p.text }}</div>
         <div class="pred-controls">
@@ -69,6 +73,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getSnapshot, listTodos, saveReview } from '../services/profile-service.js'
+import { deviation } from '../api/index.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -77,6 +82,8 @@ const report = ref(null)
 const form = reactive({ actualEvents: '', humanFactors: '', externalFactors: '', selfCompassion: '', userCorrection: '' })
 
 const predictions = ref([])
+const aiLoading = ref(false)
+const aiAnalysis = ref('')
 
 async function load() {
   snapshot.value = await getSnapshot(Number(route.params.snapshotId))
@@ -102,6 +109,30 @@ async function load() {
 function setStatus(i, status) {
   predictions.value[i].status = status
   if (status === 'accurate') predictions.value[i].reason = ''
+}
+
+async function aiAnalyze() {
+  if (!form.actualEvents.trim()) { alert('请先填写「现实发生情况」再让 AI 分析'); return }
+  aiLoading.value = true
+  aiAnalysis.value = ''
+  try {
+    const res = await deviation(predictions.value.map(p => p.text), form.actualEvents)
+    const accurate = res.accurate || []
+    const deviated = res.deviated || []
+    // 用 map 返回新数组触发响应式，让 radio 自动勾选
+    predictions.value = predictions.value.map(p => {
+      const hitAccurate = accurate.some(a => a && (p.text.includes(a) || a.includes(p.text)))
+      if (hitAccurate) return { ...p, status: 'accurate', reason: '' }
+      const dev = deviated.find(d => d && d.item && (p.text.includes(d.item) || d.item.includes(p.text)))
+      if (dev) return { ...p, status: 'deviated', reason: dev.reason || '' }
+      return p
+    })
+    aiAnalysis.value = res.analysis || '分析完成，可手动微调每条判定。'
+  } catch (e) {
+    alert('AI 分析失败：' + e.message)
+  } finally {
+    aiLoading.value = false
+  }
 }
 
 async function save() {
@@ -150,6 +181,10 @@ onMounted(load)
 .reason-select { padding: var(--sp-xs); font-size: var(--fs-small); border: 1px solid var(--color-neutral-300); border-radius: var(--radius-sm); }
 .pred-correct { margin-top: var(--sp-md); border-top: 1px dashed var(--color-neutral-200); padding-top: var(--sp-md); }
 .corr-label { display: block; font-size: var(--fs-small); color: var(--color-neutral-700); margin-bottom: var(--sp-xs); }
+.ai-row { display: flex; align-items: center; gap: var(--sp-md); margin-bottom: var(--sp-md); flex-wrap: wrap; }
+.btn.ai { background: var(--color-secondary-500, #4A6A8B); color: #fff; }
+.btn.ai:disabled { background: var(--color-neutral-300); cursor: not-allowed; }
+.ai-result { font-size: var(--fs-small); color: var(--color-neutral-700); font-style: italic; flex: 1; }
 .actions { display: flex; justify-content: flex-end; }
 .btn { padding: var(--sp-sm) var(--sp-xl); border: none; border-radius: var(--radius-md); font-size: var(--fs-body); }
 .btn.ghost { background: var(--color-primary-500); color: #fff; }

@@ -36,13 +36,45 @@ app.add_middleware(
 )
 
 # ---------- 配置 ----------
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-MODEL = os.environ.get("HP_MODEL", "deepseek-chat")
+PROVIDERS = {
+    "deepseek": {
+        "name": "DeepSeek",
+        "base_url": os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+        "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+    },
+    "kimi": {
+        "name": "Kimi（月之暗面）",
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key": os.environ.get("KIMI_API_KEY", ""),
+        "model": "moonshot-v1-8k",
+    },
+}
+DEFAULT_PROVIDER = os.environ.get("HP_PROVIDER", "deepseek")
 DAILY_QUOTA = int(os.environ.get("HP_DAILY_QUOTA", "100"))
 
-PROMPT_VERSION = "p-v1.7.0"
-KNOWLEDGE_VERSION = "k-v1.0"
+
+def resolve_provider(provider: Optional[str]) -> str:
+    """归一化 provider 名，非法值回退默认"""
+    return provider if provider in PROVIDERS else DEFAULT_PROVIDER
+
+def _content_version(files: list) -> str:
+    """从文件内容 md5 生成版本号，修改文件即自动递增"""
+    h = hashlib.md5()
+    for p in files:
+        if p.exists():
+            h.update(p.read_bytes())
+    return h.hexdigest()[:8]
+
+
+PROMPT_VERSION = "p-" + _content_version([
+    PROMPT_DIR / "system_prompt_v1.7.txt",
+    PROMPT_DIR / "parse_prompt_v1.7.txt",
+    PROMPT_DIR / "recalc_prompt_v1.7.txt",
+    PROMPT_DIR / "consistency_prompt_v1.7.txt",
+    PROMPT_DIR / "deviation_prompt_v2.txt",
+])
+KNOWLEDGE_VERSION = "k-" + _content_version([KNOWLEDGE_DIR / "cases.json"])
 
 # 核心字段（用于完整度计算 + 一致性系数触发判断）
 CORE_FIELDS = [
@@ -189,13 +221,14 @@ def parse_json_safe(text: str) -> dict:
     return json.loads(text)
 
 
-async def call_llm(messages: list, temperature: float = 0.7) -> str:
+async def call_llm(messages: list, temperature: float = 0.7, provider: str = "deepseek") -> str:
+    p = PROVIDERS[resolve_provider(provider)]
     async with httpx.AsyncClient(timeout=180) as client:
         resp = await client.post(
-            f"{DEEPSEEK_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+            f"{p['base_url']}/chat/completions",
+            headers={"Authorization": f"Bearer {p['api_key']}"},
             json={
-                "model": MODEL,
+                "model": p["model"],
                 "messages": messages,
                 "response_format": {"type": "json_object"},
                 "temperature": temperature,
@@ -207,7 +240,7 @@ async def call_llm(messages: list, temperature: float = 0.7) -> str:
         return data["choices"][0]["message"]["content"]
 
 
-async def run_consistency(profile: dict, paths: list[dict]) -> str:
+async def run_consistency(profile: dict, paths: list[dict], provider: str = "deepseek") -> str:
     """3 次低温并行推理，返回一致性系数（各路径评分标准差平均值，字符串；异常时回退 '中'）"""
     prompt = load_prompt("consistency_prompt_v1.7.txt")
     path_names = [p.get("name", "") for p in paths]
@@ -218,7 +251,7 @@ async def run_consistency(profile: dict, paths: list[dict]) -> str:
     ]
 
     async def one_run():
-        raw = await call_llm(messages, temperature=0.3)
+        raw = await call_llm(messages, temperature=0.3, provider=provider)
         return parse_json_safe(raw).get("scores", [])
 
     try:
@@ -246,11 +279,13 @@ async def run_consistency(profile: dict, paths: list[dict]) -> str:
 # ---------- 请求模型 ----------
 class ParseRequest(BaseModel):
     text: str = Field(..., min_length=1)
+    provider: Optional[str] = None
 
 
 class DeduceRequest(BaseModel):
     profile: dict = Field(...)
     industry: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class Adjustment(BaseModel):
@@ -263,6 +298,13 @@ class RecalcRequest(BaseModel):
     profile: dict = Field(...)
     paths: list[dict] = Field(...)
     adjustments: list[Adjustment] = Field(...)
+    provider: Optional[str] = None
+
+
+class DeviationRequest(BaseModel):
+    predictions: list[str] = Field(..., min_length=1)
+    actualEvents: str = Field(...)
+    provider: Optional[str] = None
 
 
 # ---------- 端点 ----------
@@ -270,24 +312,28 @@ class RecalcRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "model": MODEL,
+        "providers": {
+            k: {"name": v["name"], "model": v["model"], "configured": bool(v["api_key"])}
+            for k, v in PROVIDERS.items()
+        },
+        "default_provider": DEFAULT_PROVIDER,
         "prompt_version": PROMPT_VERSION,
         "knowledge_version": KNOWLEDGE_VERSION,
-        "api_key_configured": bool(DEEPSEEK_API_KEY),
     }
 
 
 @app.post("/api/parse")
 async def parse(req: ParseRequest):
     """自然语言 → 结构化档案预览（解析 Prompt，JSON mode）"""
-    if not DEEPSEEK_API_KEY:
-        raise HTTPException(status_code=503, detail="大模型 API Key 未配置")
+    provider = resolve_provider(req.provider)
+    if not PROVIDERS[provider]["api_key"]:
+        raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
     prompt = load_prompt("parse_prompt_v1.7.txt")
     messages = [
         {"role": "system", "content": prompt},
         {"role": "user", "content": req.text},
     ]
-    raw = await call_llm(messages, temperature=0.1)
+    raw = await call_llm(messages, temperature=0.1, provider=provider)
     try:
         data = parse_json_safe(raw)
     except json.JSONDecodeError:
@@ -298,8 +344,9 @@ async def parse(req: ParseRequest):
 @app.post("/api/deduce")
 async def deduce(req: DeduceRequest):
     """档案 + 知识上下文 → 推演报告（推演 Prompt，JSON mode + 双层校验 + 一致性系数）"""
-    if not DEEPSEEK_API_KEY:
-        raise HTTPException(status_code=503, detail="大模型 API Key 未配置")
+    provider = resolve_provider(req.provider)
+    if not PROVIDERS[provider]["api_key"]:
+        raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
     enforce_quota()
     _request_log.append(time.time())
 
@@ -336,7 +383,7 @@ async def deduce(req: DeduceRequest):
     ]
 
     # 主推演（温度 0.7）
-    raw = await call_llm(messages, temperature=0.7)
+    raw = await call_llm(messages, temperature=0.7, provider=provider)
 
     # 第一层硬拦截
     block = hard_validate(raw)
@@ -354,7 +401,7 @@ async def deduce(req: DeduceRequest):
     # 3 次低温并行一致性系数（完整度≥70% 才触发，控制成本）
     consistency = "中"
     if comp >= 70 and report.get("paths"):
-        consistency = await run_consistency(req.profile, report["paths"])
+        consistency = await run_consistency(req.profile, report["paths"], provider=provider)
 
     # 注入元信息（后端权威版本号）
     if "meta" not in report:
@@ -362,7 +409,7 @@ async def deduce(req: DeduceRequest):
     report["meta"].update({
         "knowledgeVersion": KNOWLEDGE_VERSION,
         "promptVersion": PROMPT_VERSION,
-        "modelVersion": MODEL,
+        "modelVersion": PROVIDERS[provider]["model"],
         "completenessScore": comp,
         "consistencyCoefficient": consistency,
         "detectedIndustry": industry,
@@ -380,8 +427,9 @@ async def deduce(req: DeduceRequest):
 @app.post("/api/recalc")
 async def recalc(req: RecalcRequest):
     """参数微调·快速重算 —— 复用原推演上下文，仅增量更新受影响的路径评分与风险提示"""
-    if not DEEPSEEK_API_KEY:
-        raise HTTPException(status_code=503, detail="大模型 API Key 未配置")
+    provider = resolve_provider(req.provider)
+    if not PROVIDERS[provider]["api_key"]:
+        raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
     enforce_quota()
     _request_log.append(time.time())
 
@@ -415,7 +463,7 @@ async def recalc(req: RecalcRequest):
         {"role": "user", "content": user_content},
     ]
 
-    raw = await call_llm(messages, temperature=0.3)
+    raw = await call_llm(messages, temperature=0.3, provider=provider)
 
     block = hard_validate(raw)
     if block:
@@ -434,6 +482,36 @@ async def recalc(req: RecalcRequest):
         p["newScore"] = round(float(new), 1)
         p["delta"] = round(float(p.get("delta", p["newScore"] - p["originalScore"])), 1)
 
+    return result
+
+
+@app.post("/api/deviation")
+async def deviation(req: DeviationRequest):
+    """推演偏差自检 —— 对比三条预测与现实情况，LLM 输出准确项/偏差项/原因"""
+    provider = resolve_provider(req.provider)
+    if not PROVIDERS[provider]["api_key"]:
+        raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
+    enforce_quota()
+    _request_log.append(time.time())
+
+    prompt = load_prompt("deviation_prompt_v2.txt")
+    user_content = json.dumps(
+        {"predictions": req.predictions, "actualEvents": req.actualEvents},
+        ensure_ascii=False,
+    )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": user_content},
+    ]
+    raw = await call_llm(messages, temperature=0.2, provider=provider)
+    try:
+        result = parse_json_safe(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="偏差分析结果格式异常，请重试")
+
+    result.setdefault("accurate", [])
+    result.setdefault("deviated", [])
+    result.setdefault("analysis", "")
     return result
 
 
