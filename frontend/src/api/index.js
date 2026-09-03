@@ -1,5 +1,6 @@
 // 后端薄代理 API client
-const API_BASE = '/api'
+// 用 vite base 动态计算，生产环境为 /history-plan/api，避免绝对路径 /api 落到根域名
+const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 const PROVIDER_KEY = 'hp_provider'
 
 async function post(path, body) {
