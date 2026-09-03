@@ -103,6 +103,68 @@ export async function saveCustomCase(data) {
 }
 export function deleteCustomCase(id) { return db.delete('customCases', id) }
 
+// ---------- 偏差聚合 ----------
+export async function getDeviationSummary() {
+  const [reviews, profiles] = await Promise.all([
+    db.getAll('reviews'),
+    db.getAll('profiles'),
+  ])
+  const nameMap = {}
+  profiles.forEach(p => { nameMap[p.id] = p.name || '未命名' })
+
+  const summary = {
+    totalReviews: reviews.length,
+    totalAccurate: 0,
+    totalDeviated: 0,
+    accuracyRate: 0,
+    reasonDist: { '信息不全导致': 0, '外部变局冲击': 0, '模型推理局限': 0, '执行偏差': 0, '未注明原因': 0 },
+    byProfile: [],
+    byMonth: [],
+  }
+  const profileAgg = {}
+  const monthAgg = {}
+
+  reviews.forEach(r => {
+    const dr = r.deviationReport || {}
+    const accurate = (dr.accurate || []).length
+    const deviatedArr = dr.deviated || []
+    const deviated = deviatedArr.length
+    summary.totalAccurate += accurate
+    summary.totalDeviated += deviated
+
+    deviatedArr.forEach(d => {
+      const reason = d && d.reason ? d.reason : '未注明原因'
+      summary.reasonDist[reason] = (summary.reasonDist[reason] || 0) + 1
+    })
+
+    const pid = r.profileId
+    if (pid != null) {
+      if (!profileAgg[pid]) profileAgg[pid] = { profileId: pid, name: nameMap[pid] || '未命名', reviews: 0, accurate: 0, deviated: 0 }
+      profileAgg[pid].reviews++
+      profileAgg[pid].accurate += accurate
+      profileAgg[pid].deviated += deviated
+    }
+
+    const m = (r.createdAt || '').slice(0, 7)
+    if (m) {
+      if (!monthAgg[m]) monthAgg[m] = { month: m, accurate: 0, deviated: 0 }
+      monthAgg[m].accurate += accurate
+      monthAgg[m].deviated += deviated
+    }
+  })
+
+  const total = summary.totalAccurate + summary.totalDeviated
+  summary.accuracyRate = total ? Math.round(summary.totalAccurate / total * 100) : 0
+
+  summary.byProfile = Object.values(profileAgg)
+    .map(p => ({ ...p, rate: (p.accurate + p.deviated) ? Math.round(p.accurate / (p.accurate + p.deviated) * 100) : 0 }))
+    .sort((a, b) => b.deviated - a.deviated || b.accurate - a.accurate)
+
+  summary.byMonth = Object.values(monthAgg).sort((a, b) => a.month.localeCompare(b.month))
+
+  return summary
+}
+
 // ---------- 备份 ----------
 export const exportAllData = () => db.exportAllData()
 export const importAllData = (data) => db.importAllData(data)
@@ -111,5 +173,5 @@ export default {
   listProfiles, getProfile, createProfile, updateProfile, duplicateProfile, deleteProfile,
   listSnapshots, getSnapshot, saveSnapshot,
   listTodos, saveTodo, updateTodo, deleteTodo,
-  listReviews, saveReview, exportAllData, importAllData,
+  listReviews, saveReview, getDeviationSummary, exportAllData, importAllData,
 }

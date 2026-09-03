@@ -7,6 +7,7 @@ const routes = [
   { path: '/profiles/:id', component: () => import('../views/ProfileDetail.vue') },
   { path: '/report/:snapshotId', component: () => import('../views/Report.vue') },
   { path: '/review/:snapshotId', component: () => import('../views/Review.vue') },
+  { path: '/deviation', component: () => import('../views/DeviationDashboard.vue') },
   { path: '/settings', component: () => import('../views/Settings.vue') },
 ]
 

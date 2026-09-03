@@ -3,6 +3,7 @@
     <header class="global-nav">
       <router-link to="/profiles" class="brand serif">历史推演规划系统</router-link>
       <span class="motto serif">谋事在人，顺时知变</span>
+      <router-link to="/deviation" class="nav-link">偏差总览</router-link>
       <router-link to="/settings" class="nav-link">设置</router-link>
     </header>
     <main class="content">
