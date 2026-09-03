@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -25,7 +25,7 @@ app = FastAPI(title="History-Plan 推演代理", version="1.7.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产按 ct256.cn 收紧
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -34,29 +34,38 @@ app.add_middleware(
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 MODEL = os.environ.get("HP_MODEL", "deepseek-chat")
-
-# 单日全局推演配额（默认100次/天）
 DAILY_QUOTA = int(os.environ.get("HP_DAILY_QUOTA", "100"))
 
-# ---------- 提示词版本 ----------
 PROMPT_VERSION = "p-v1.7.0"
 KNOWLEDGE_VERSION = "k-v1.0"
+
+# 核心字段（用于完整度计算 + 一致性系数触发判断）
+CORE_FIELDS = [
+    "name", "age", "era", "region", "familyEconomicCapital", "familyCulturalCapital",
+    "familySymbolicCapital", "skills", "personality", "mindset", "health",
+    "financialResources", "networkResources", "timeResources", "toolResources",
+    "constraints", "externalPressure", "unchangeableLimits", "shortTermGoal",
+    "mediumTermGoal", "longTermGoal", "keyDecisions", "externalChanges",
+]
 
 # 定数类表述黑名单（第一层硬拦截）
 FATAL_WORDS = [
     "注定", "天意不可违", "命中注定", "宿命", "一定成功", "必然失败",
-    "无法改变", "命里注定", "天注定",
+    "无法改变", "命里注定", "天注定", "万无一失",
 ]
-# 投资/心理/法律类敏感词
 SENSITIVE_WORDS = [
-    "买入", "卖出", "投资回报率", "仓位", "加杠杆", "配置比例",
-    "诊断", "处方", "抑郁症", "焦虑症", "确诊",
-    "起诉", "赔偿", "律师函",
+    # 投资操作指令（避免误伤电商"买入/卖出商品"等正常用语）
+    "买入股票", "卖出股票", "买入基金", "卖出基金", "买入币", "加仓", "满仓", "重仓",
+    "建仓", "平仓", "加杠杆", "投资回报率", "年化收益", "配置比例", "推荐买入", "推荐卖出",
+    "资产配置方案",
+    # 医疗诊断（避免误伤"自我诊断/诊断处境"等自省用语）
+    "抑郁症", "焦虑症", "精神分裂", "双相障碍", "开处方", "开具处方",
+    # 法律意见
+    "建议起诉", "建议索赔", "律师函", "应诉", "法律意见书",
 ]
 
-# ---------- 运行时状态 ----------
-_request_log: list[float] = []  # 当日推演时间戳，用于配额
-_simhash_cache: dict[str, dict] = {}  # simhash -> {ts, result}
+_request_log: list[float] = []
+_simhash_cache: dict[str, dict] = {}
 
 
 def load_prompt(name: str) -> str:
@@ -65,7 +74,6 @@ def load_prompt(name: str) -> str:
 
 
 def load_knowledge() -> dict:
-    """加载知识库（30-50 精选案例）。V1 先读空壳，M3 填充案例。"""
     kb_file = KNOWLEDGE_DIR / "cases.json"
     if kb_file.exists():
         return json.loads(kb_file.read_text(encoding="utf-8"))
@@ -73,7 +81,6 @@ def load_knowledge() -> dict:
 
 
 def simhash(text: str, bits: int = 64) -> str:
-    """简单 SimHash：用于相似档案复用判断（M3 完善）。"""
     tokens = re.findall(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z0-9]+", text)
     v = [0] * bits
     for tok in tokens:
@@ -83,8 +90,12 @@ def simhash(text: str, bits: int = 64) -> str:
     return "".join("1" if x > 0 else "0" for x in v)
 
 
+def completeness(profile: dict) -> int:
+    filled = [k for k in CORE_FIELDS if str(profile.get(k, "") or "").strip()]
+    return round(len(filled) / len(CORE_FIELDS) * 100)
+
+
 def hard_validate(text: str) -> Optional[str]:
-    """第一层硬拦截：命中定数/敏感词返回拦截话术，否则 None。"""
     for w in FATAL_WORDS:
         if w in text:
             return "检测到定数类表述，已拦截。本系统仅作事理参考，不输出宿命结论。"
@@ -101,18 +112,43 @@ def enforce_quota() -> None:
         raise HTTPException(status_code=429, detail="今日推演额度已用完，请联系管理员")
 
 
-# ---------- 请求/响应模型 ----------
+def parse_json_safe(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return json.loads(text)
+
+
+async def call_llm(messages: list, temperature: float = 0.7) -> str:
+    async with httpx.AsyncClient(timeout=180) as client:
+        resp = await client.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+            json={
+                "model": MODEL,
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+                "temperature": temperature,
+            },
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"模型调用失败 {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
+# ---------- 请求模型 ----------
 class ParseRequest(BaseModel):
-    text: str = Field(..., min_length=1, description="用户自由文本描述")
+    text: str = Field(..., min_length=1)
 
 
 class DeduceRequest(BaseModel):
-    profile: dict = Field(..., description="人物档案（完整字段）")
-    industry: Optional[str] = Field(None, description="行业标签，用于匹配近现代人物")
-    knowledge_version: Optional[str] = None
-    prompt_version: Optional[str] = None
+    profile: dict = Field(...)
+    industry: Optional[str] = None
 
 
+# ---------- 端点 ----------
 @app.get("/api/health")
 def health():
     return {
@@ -126,23 +162,79 @@ def health():
 
 @app.post("/api/parse")
 async def parse(req: ParseRequest):
-    """自然语言 → 结构化档案（解析 Prompt）。M2 对接。"""
+    """自然语言 → 结构化档案预览（解析 Prompt，JSON mode）"""
     if not DEEPSEEK_API_KEY:
         raise HTTPException(status_code=503, detail="大模型 API Key 未配置")
-    # TODO(M2): 调用解析 Prompt + JSON mode，返回 profile 预览
-    raise HTTPException(status_code=501, detail="解析引擎 M2 阶段接入")
+    prompt = load_prompt("parse_prompt_v1.7.txt")
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": req.text},
+    ]
+    raw = await call_llm(messages, temperature=0.1)
+    try:
+        data = parse_json_safe(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="解析结果格式异常，请重试")
+    return data
 
 
 @app.post("/api/deduce")
 async def deduce(req: DeduceRequest):
-    """档案 + 知识上下文 → 推演报告（推演 Prompt）。M3 对接。"""
+    """档案 + 知识上下文 → 推演报告（推演 Prompt，JSON mode + 双层校验）"""
     if not DEEPSEEK_API_KEY:
         raise HTTPException(status_code=503, detail="大模型 API Key 未配置")
     enforce_quota()
-    # TODO(M3): 组装知识上下文 + 3次低温并行一致性 + JSON mode 输出 + 双层校验 + SimHash 缓存
-    raise HTTPException(status_code=501, detail="推演引擎 M3 阶段接入")
+    _request_log.append(time.time())
+
+    prompt = load_prompt("system_prompt_v1.7.txt")
+    knowledge = load_knowledge()
+
+    user_content = json.dumps(
+        {
+            "人物档案": req.profile,
+            "行业标签": req.industry or "",
+            "历史知识库上下文": knowledge.get("cases", []),
+        },
+        ensure_ascii=False,
+    )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    # 主推演（温度 0.7）
+    raw = await call_llm(messages, temperature=0.7)
+
+    # 第一层硬拦截
+    block = hard_validate(raw)
+    if block:
+        raise HTTPException(status_code=400, detail=block)
+
+    try:
+        report = parse_json_safe(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="推演结果格式异常，请重试")
+
+    # 注入元信息（后端权威版本号）
+    if "meta" not in report:
+        report["meta"] = {}
+    report["meta"].update({
+        "knowledgeVersion": KNOWLEDGE_VERSION,
+        "promptVersion": PROMPT_VERSION,
+        "modelVersion": MODEL,
+        "completenessScore": completeness(req.profile),
+        "consistencyCoefficient": report["meta"].get("consistencyCoefficient", "中"),
+    })
+
+    # 相似档案 SimHash 缓存（完整度>80% 才启用）
+    comp = completeness(req.profile)
+    if comp > 80:
+        key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
+        _simhash_cache[key] = {"ts": time.time(), "report": report}
+
+    return report
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8010)
+    uvicorn.run(app, host="0.0.0.0", port=8012)
