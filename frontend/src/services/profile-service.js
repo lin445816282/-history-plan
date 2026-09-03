@@ -30,7 +30,16 @@ export async function createProfile(data) {
 
 export async function updateProfile(id, data) {
   const existing = await db.get('profiles', id)
-  const merged = { ...existing, ...data, updatedAt: new Date().toISOString() }
+  const now = new Date().toISOString()
+  // 记录变更日志（排除时间戳与日志自身字段）
+  const changedFields = Object.keys(data).filter(k =>
+    !['updatedAt', 'changeLog', 'createdAt'].includes(k) &&
+    String(data[k] ?? '') !== String(existing[k] ?? '')
+  )
+  const changeLog = changedFields.length
+    ? [...(existing.changeLog || []), { at: now, fields: changedFields }].slice(-50)
+    : (existing.changeLog || [])
+  const merged = { ...existing, ...data, changeLog, updatedAt: now }
   await db.update('profiles', merged)
   return merged
 }

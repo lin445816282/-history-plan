@@ -132,6 +132,8 @@ SENSITIVE_WORDS = [
 
 _request_log: list[float] = []
 _simhash_cache: dict[str, dict] = {}
+_case_stats: dict[str, int] = {}       # 案例名 -> 引用次数（内存统计，重启重置）
+_review_queue: list[dict] = []         # 软校验待审核队列（内存，最多 100 条）
 
 
 def load_prompt(name: str) -> str:
@@ -190,6 +192,16 @@ def soft_validate(report: dict) -> list[str]:
     if cautious < 5:
         warnings.append("谨慎性表述偏少")
     return warnings
+
+
+def record_case_references(report: dict) -> None:
+    """从报告提取被对标的历史人物名，累加引用频次统计"""
+    bench = report.get("macroAnalysis", {}).get("historicalBenchmark", {})
+    figures = bench.get("ancientFigures", []) + bench.get("modernFigures", [])
+    for fig in figures:
+        name = fig.get("name", "")
+        if name:
+            _case_stats[name] = _case_stats.get(name, 0) + 1
 
 
 def completeness(profile: dict) -> int:
@@ -410,6 +422,14 @@ async def deduce(req: DeduceRequest):
 
     # 第二层软校验（规则引擎，记录警告）
     soft_warnings = soft_validate(report)
+    if soft_warnings:
+        _review_queue.append({
+            "ts": time.time(),
+            "reportId": report.get("reportId", ""),
+            "profileName": req.profile.get("name", ""),
+            "warnings": soft_warnings,
+        })
+        _review_queue[:] = _review_queue[-100:]
 
     # 3 次低温并行一致性系数（完整度≥70% 才触发，控制成本）
     consistency = "中"
@@ -433,6 +453,9 @@ async def deduce(req: DeduceRequest):
     if comp > 80:
         key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
         _simhash_cache[key] = {"ts": time.time(), "report": report}
+
+    # 案例引用频次统计
+    record_case_references(report)
 
     return report
 

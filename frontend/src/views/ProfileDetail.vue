@@ -93,7 +93,7 @@
       <div v-if="snapshots.length === 0" class="empty-note">还没有推演记录，点击「开始推演」生成第一份报告。</div>
       <div v-else class="history-list">
         <router-link
-          v-for="s in snapshots"
+          v-for="s in visibleSnapshots"
           :key="s.id"
           :to="`/report/${s.id}`"
           class="history-item"
@@ -102,6 +102,18 @@
           <span class="h-report">推演报告 #{{ s.id }}</span>
           <span class="h-arrow">→</span>
         </router-link>
+      </div>
+      <p v-if="snapshots.length > 50" class="archived-note">已归档 {{ snapshots.length - 50 }} 条更早的快照（仅展示最近 50 条）</p>
+    </div>
+
+    <!-- 档案变更日志 -->
+    <div v-if="profile.changeLog?.length" class="history changelog">
+      <h3 class="history-title">档案变更日志</h3>
+      <div class="changelog-list">
+        <div v-for="(c, i) in profile.changeLog.slice().reverse()" :key="i" class="changelog-item">
+          <span class="cl-time">{{ fmtTime(c.at) }}</span>
+          <span class="cl-fields">修改字段：{{ c.fields.join('、') }}</span>
+        </div>
       </div>
     </div>
   </div>
@@ -134,6 +146,7 @@ const compareResult = ref(null)
 
 const score = computed(() => profile.value ? completenessScore(profile.value) : 0)
 const scoreCls = computed(() => score.value < 60 ? 'low' : '')
+const visibleSnapshots = computed(() => snapshots.value.slice(0, 50))
 
 function toggleGroup(key) {
   const s = new Set(openGroups.value)
@@ -277,6 +290,11 @@ onMounted(load)
 .h-time { color: var(--color-neutral-500); font-size: var(--fs-small); }
 .h-report { flex: 1; color: var(--color-neutral-900); }
 .h-arrow { color: var(--color-primary-500); }
+.archived-note { font-size: var(--fs-caption); color: var(--color-neutral-500); margin-top: var(--sp-sm); text-align: center; }
+.changelog-list { display: flex; flex-direction: column; gap: var(--sp-xs); }
+.changelog-item { display: flex; gap: var(--sp-md); font-size: var(--fs-small); padding: var(--sp-xs) var(--sp-sm); background: var(--color-neutral-50); border-radius: var(--radius-sm); }
+.cl-time { color: var(--color-neutral-500); white-space: nowrap; }
+.cl-fields { color: var(--color-neutral-700); }
 .compare-panel { background: #fff; border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); padding: var(--sp-lg); margin-bottom: var(--sp-lg); }
 .compare-title { font-size: var(--fs-h3); color: var(--color-primary-700); margin-bottom: var(--sp-xs); }
 .compare-hint { font-size: var(--fs-caption); color: var(--color-neutral-500); margin-bottom: var(--sp-md); }
