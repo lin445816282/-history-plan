@@ -49,7 +49,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   QUICK_REQUIRED, FOLLOWUP_ORDER, FIELD_MAP, emptyProfile,
