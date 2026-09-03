@@ -239,7 +239,7 @@ async function startDeduce() {
       promptVersion: report.meta?.promptVersion || 'p-v1.7.0',
       consistencyCoefficient: report.meta?.consistencyCoefficient || '中',
       fullReport: report,
-      profileSnapshot: { ...profile.value },
+      profileSnapshot: JSON.parse(JSON.stringify(profile.value)),
       todoIds: [],
       reviewId: null,
     })
