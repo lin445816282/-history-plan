@@ -26,7 +26,7 @@
 }
 .brand { font-size: var(--fs-h3); font-weight: 700; color: #fff; }
 .motto { color: var(--color-primary-100); font-size: var(--fs-small); flex: 1; }
-.nav-link { color: #fff; }
+.nav-link { color: #fff; font-size: var(--fs-small); }
 .content { flex: 1; max-width: 960px; width: 100%; margin: 0 auto; padding: var(--sp-lg); }
 .global-footer { text-align: center; padding: var(--sp-lg); color: var(--color-neutral-500); font-size: var(--fs-caption); }
 
@@ -36,8 +36,9 @@
 }
 
 @media (max-width: 480px) {
-  .global-nav { padding: 0 var(--sp-md); }
-  .brand { font-size: var(--fs-body); }
+  .global-nav { padding: 0 var(--sp-sm); gap: var(--sp-sm); }
+  .brand { font-size: 13px; white-space: nowrap; }
   .motto { display: none; }
+  .nav-link { font-size: 12px; padding: var(--sp-xs); white-space: nowrap; }
 }
 </style>
