@@ -201,9 +201,25 @@ export class HistoryPlanDB {
       }
     }
     
-    // 类似处理snapshots, reviews, todos...
-    // (完整代码略，逻辑同上)
-    
+    // 类似处理 snapshots, reviews, todos
+    for (const storeName of ['snapshots', 'reviews', 'todos']) {
+      for (const item of data[storeName] || []) {
+        try {
+          const existing = await this.get(storeName, item.id);
+          if (existing) {
+            await this.update(storeName, item);
+            results.merged++;
+          } else {
+            await this.add(storeName, item);
+            results.added++;
+          }
+        } catch (e) {
+          results.errors++;
+          console.error(`导入${storeName}失败:`, e);
+        }
+      }
+    }
+
     return results;
   }
 }
