@@ -11,13 +11,40 @@
         </div>
       </div>
     </div>
+    <!-- 推演历史（有快照则提供跳转入口） -->
+    <div v-if="snapshots.length" class="deduce-history">
+      <h4 class="section-title">📄 推演历史</h4>
+      <div v-for="s in snapshots" :key="s.id" class="history-item" @click="goReport(s.id)">
+        <span class="h-dot"></span>
+        <span class="h-label">推演报告 #{{ s.id }}</span>
+        <span class="h-time">{{ fmt(s.timestamp) }}</span>
+        <span class="h-arrow">→</span>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, reactive } from 'vue'
+import { useRouter } from 'vue-router'
 
-const props = defineProps({ profile: { type: Object, required: true } })
+const props = defineProps({
+  profile: { type: Object, required: true },
+  snapshots: { type: Array, default: () => [] },
+})
+
+const router = useRouter()
+
+function fmt(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function goReport(id) {
+  router.push(`/report/${id}`)
+}
 
 // 三段时间轴：过往 / 当下 / 未来
 const sections = computed(() => {
@@ -69,4 +96,12 @@ function toggle(node) {
 .node-title { font-size: var(--fs-small); font-weight: 600; color: var(--color-neutral-700); margin-bottom: 2px; }
 .node-text { font-size: var(--fs-small); color: var(--color-neutral-900); line-height: 1.6; white-space: pre-wrap; }
 .node-text.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.deduce-history { position: relative; padding-left: var(--sp-lg); margin-top: var(--sp-sm); }
+.deduce-history::before { content: ''; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; background: var(--color-secondary-300, #C4C4C4); }
+.history-item { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-sm); margin-bottom: var(--sp-xs); background: var(--color-neutral-50); border-radius: var(--radius-md); cursor: pointer; }
+.history-item:hover { background: var(--color-secondary-100, #E8EEF5); }
+.h-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-secondary-500); flex-shrink: 0; }
+.h-label { flex: 1; font-size: var(--fs-small); font-weight: 600; color: var(--color-neutral-900); }
+.h-time { font-size: var(--fs-caption); color: var(--color-neutral-500); }
+.h-arrow { color: var(--color-secondary-500); }
 </style>

@@ -8,6 +8,8 @@ import time
 import json
 import hashlib
 import re
+import asyncio
+import statistics
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +53,34 @@ CORE_FIELDS = [
     "mediumTermGoal", "longTermGoal", "keyDecisions", "externalChanges",
 ]
 
+# 近现代行业人物子库的 6 大领域 → 关键词（用于档案文本自动识别行业，优先注入匹配案例）
+INDUSTRY_KEYWORDS = {
+    "科技互联网": ["科技", "互联网", "程序员", "软件", "人工智能", "AI", "电商", "数字", "App", "产品经理", "代码", "IT", "开发", "技术", "网络"],
+    "制造工匠": ["制造", "工厂", "工匠", "手艺", "生产", "机械", "加工", "工艺", "供应链", "实业"],
+    "文化创意": ["文创", "设计", "艺术", "内容", "写作", "自媒体", "短视频", "影视", "游戏", "动漫", "创意", "文案", "博主"],
+    "教育学术": ["教育", "培训", "老师", "教师", "学术", "研究", "学校", "学生", "升学", "考试", "教培"],
+    "商业金融": ["商业", "创业", "金融", "投资", "生意", "开店", "销售", "市场", "贸易", "零售", "经商", "融资"],
+    "医疗科研": ["医疗", "医生", "护士", "医院", "科研", "生物", "医药", "健康", "临床", "药"],
+}
+
+
+def detect_industry(profile: dict) -> str:
+    """从档案文本自动识别行业领域（关键词命中计数，返回命中最多者）"""
+    text = " ".join(str(v) for v in profile.values() if isinstance(v, str))
+    scores = {ind: sum(1 for kw in kws if kw in text) for ind, kws in INDUSTRY_KEYWORDS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else ""
+
+
+def reorder_cases_by_industry(cases: list, industry: str) -> list:
+    """将匹配行业的近现代案例排到知识库上下文最前（其余保持原序），便于 LLM 优先对标"""
+    if not industry:
+        return cases
+    matched = [c for c in cases if c.get("industry") == industry]
+    rest = [c for c in cases if c.get("industry") != industry]
+    return matched + rest
+
+
 # 定数类表述黑名单（第一层硬拦截）
 FATAL_WORDS = [
     "注定", "天意不可违", "命中注定", "宿命", "一定成功", "必然失败",
@@ -91,6 +121,42 @@ def simhash(text: str, bits: int = 64) -> str:
         for i in range(bits):
             v[i] += 1 if (h >> (i % 64)) & 1 else -1
     return "".join("1" if x > 0 else "0" for x in v)
+
+
+def hamming_distance(a: str, b: str) -> int:
+    return sum(c1 != c2 for c1, c2 in zip(a, b))
+
+
+def find_similar_cached(key: str, max_hamming: int = 3, max_age: int = 7 * 86400) -> Optional[dict]:
+    """在缓存中查找 7 天内、汉明距离 ≤ max_hamming（≈95% 相似）的相似档案推演"""
+    now = time.time()
+    for k, v in _simhash_cache.items():
+        if now - v["ts"] < max_age and hamming_distance(key, k) <= max_hamming:
+            return v
+    return None
+
+
+def soft_validate(report: dict) -> list[str]:
+    """第二层软校验（规则引擎，不调 LLM）—— 返回警告列表，供前端/后端记录"""
+    warnings = []
+    paths = report.get("paths", [])
+    if not paths:
+        warnings.append("未生成发展路径")
+    elif len(paths) < 3:
+        warnings.append("发展路径不足 3 条")
+    risk = report.get("riskAnalysis", {})
+    if not risk.get("warnings"):
+        warnings.append("缺少风险预警条件")
+    if not risk.get("sensitivity"):
+        warnings.append("缺少关键变量敏感性分析")
+    if not report.get("summary"):
+        warnings.append("缺少一分钟速览摘要")
+    # 谨慎性表述密度检查
+    text = json.dumps(report, ensure_ascii=False)
+    cautious = sum(text.count(w) for w in ["风险", "止损", "不确定", "代价", "谨慎", "可能"])
+    if cautious < 5:
+        warnings.append("谨慎性表述偏少")
+    return warnings
 
 
 def completeness(profile: dict) -> int:
@@ -139,6 +205,42 @@ async def call_llm(messages: list, temperature: float = 0.7) -> str:
             raise HTTPException(status_code=502, detail=f"模型调用失败 {resp.status_code}: {resp.text[:200]}")
         data = resp.json()
         return data["choices"][0]["message"]["content"]
+
+
+async def run_consistency(profile: dict, paths: list[dict]) -> str:
+    """3 次低温并行推理，返回一致性系数（各路径评分标准差平均值，字符串；异常时回退 '中'）"""
+    prompt = load_prompt("consistency_prompt_v1.7.txt")
+    path_names = [p.get("name", "") for p in paths]
+    user_content = json.dumps({"人物档案": profile, "路径列表": path_names}, ensure_ascii=False)
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    async def one_run():
+        raw = await call_llm(messages, temperature=0.3)
+        return parse_json_safe(raw).get("scores", [])
+
+    try:
+        runs = await asyncio.gather(one_run(), one_run(), one_run())
+    except Exception:
+        return "中"
+
+    # 收集每个路径的评分（主推演 1 个 + 3 次并行 3 个）
+    name_to_scores: dict[str, list] = {p.get("name"): [float(p.get("score", 0) or 0)] for p in paths}
+    for run in runs:
+        for item in run:
+            name = item.get("name")
+            if name in name_to_scores:
+                try:
+                    name_to_scores[name].append(float(item.get("score", 0) or 0))
+                except (TypeError, ValueError):
+                    pass
+
+    stds = [statistics.stdev(s) for s in name_to_scores.values() if len(s) >= 3]
+    if not stds:
+        return "中"
+    return f"{sum(stds) / len(stds):.2f}"
 
 
 # ---------- 请求模型 ----------
@@ -195,20 +297,36 @@ async def parse(req: ParseRequest):
 
 @app.post("/api/deduce")
 async def deduce(req: DeduceRequest):
-    """档案 + 知识上下文 → 推演报告（推演 Prompt，JSON mode + 双层校验）"""
+    """档案 + 知识上下文 → 推演报告（推演 Prompt，JSON mode + 双层校验 + 一致性系数）"""
     if not DEEPSEEK_API_KEY:
         raise HTTPException(status_code=503, detail="大模型 API Key 未配置")
     enforce_quota()
     _request_log.append(time.time())
 
+    comp = completeness(req.profile)
+
+    # 相似档案 SimHash 缓存复用（完整度>80% 且命中近期相似档案时直接返回）
+    if comp > 80:
+        key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
+        cached = find_similar_cached(key)
+        if cached:
+            reused = json.loads(json.dumps(cached["report"], ensure_ascii=False))
+            reused.setdefault("meta", {})["reusedFromSimilar"] = True
+            reused["meta"]["completenessScore"] = comp
+            return reused
+
     prompt = load_prompt("system_prompt_v1.7.txt")
     knowledge = load_knowledge()
+
+    # 行业自动识别 + 近现代案例优先注入
+    industry = req.industry or detect_industry(req.profile)
+    ordered_cases = reorder_cases_by_industry(knowledge.get("cases", []), industry)
 
     user_content = json.dumps(
         {
             "人物档案": req.profile,
-            "行业标签": req.industry or "",
-            "历史知识库上下文": knowledge.get("cases", []),
+            "行业标签": industry,
+            "历史知识库上下文": ordered_cases,
         },
         ensure_ascii=False,
     )
@@ -230,6 +348,14 @@ async def deduce(req: DeduceRequest):
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="推演结果格式异常，请重试")
 
+    # 第二层软校验（规则引擎，记录警告）
+    soft_warnings = soft_validate(report)
+
+    # 3 次低温并行一致性系数（完整度≥70% 才触发，控制成本）
+    consistency = "中"
+    if comp >= 70 and report.get("paths"):
+        consistency = await run_consistency(req.profile, report["paths"])
+
     # 注入元信息（后端权威版本号）
     if "meta" not in report:
         report["meta"] = {}
@@ -237,12 +363,13 @@ async def deduce(req: DeduceRequest):
         "knowledgeVersion": KNOWLEDGE_VERSION,
         "promptVersion": PROMPT_VERSION,
         "modelVersion": MODEL,
-        "completenessScore": completeness(req.profile),
-        "consistencyCoefficient": report["meta"].get("consistencyCoefficient", "中"),
+        "completenessScore": comp,
+        "consistencyCoefficient": consistency,
+        "detectedIndustry": industry,
+        "softCheckWarnings": soft_warnings,
     })
 
-    # 相似档案 SimHash 缓存（完整度>80% 才启用）
-    comp = completeness(req.profile)
+    # 相似档案 SimHash 缓存（完整度>80% 才存储）
     if comp > 80:
         key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
         _simhash_cache[key] = {"ts": time.time(), "report": report}

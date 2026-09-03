@@ -28,6 +28,9 @@
       <button :class="{ active: tab === 'timeline' }" @click="tab = 'timeline'">时间轴视图</button>
     </div>
 
+    <!-- 定位语（推演按钮旁） -->
+    <p class="motto-line serif">谋事在人，顺时知变</p>
+
     <!-- 表格视图 -->
     <div v-if="tab === 'table'">
       <div v-for="group in FIELD_GROUPS" :key="group.key" class="group">
@@ -57,7 +60,7 @@
     </div>
 
     <!-- 时间轴视图 -->
-    <TimelineView v-else :profile="profile" />
+    <TimelineView v-else :profile="profile" :snapshots="snapshots" />
 
     <!-- 推演历史 -->
     <div class="history">
@@ -147,6 +150,25 @@ async function onDelete() {
 }
 
 async function startDeduce() {
+  // 完整度<60% 强制引导补全（提供「前往补全」/「仍要推演」两选项）
+  if (score.value < 60) {
+    const go = confirm(
+      `档案完整度仅 ${score.value}%，低于最低可信门槛（60%）。\n\n` +
+      `推演结果可信度将被评为「极低」。\n\n` +
+      `点击「确定」→ 前往补全信息；点击「取消」→ 仍直接推演。`
+    )
+    if (go) {
+      viewMode.value = 'edit'
+      return
+    }
+  }
+  // 单档案 24 小时内推演超 5 次提示（软确认，不硬阻断）
+  const dayAgo = Date.now() - 24 * 3600 * 1000
+  const recent = snapshots.value.filter(s => new Date(s.timestamp).getTime() > dayAgo)
+  if (recent.length >= 5) {
+    const ok = confirm('该档案 24 小时内已推演超过 5 次，频繁推演可能降低参考价值。是否仍要继续？')
+    if (!ok) return
+  }
   deducing.value = true
   try {
     const report = await deduce(profile.value)
@@ -187,7 +209,8 @@ onMounted(load)
 .btn.primary:disabled { background: var(--color-neutral-300); cursor: not-allowed; }
 .btn.ghost { background: #fff; border: 1px solid var(--color-neutral-300); color: var(--color-neutral-700); }
 .btn.ghost.danger:hover { border-color: var(--color-error); color: var(--color-error); }
-.tabs { display: flex; gap: var(--sp-sm); margin-bottom: var(--sp-lg); }
+.tabs { display: flex; gap: var(--sp-sm); margin-bottom: var(--sp-md); }
+.motto-line { text-align: center; color: var(--color-primary-500); margin-bottom: var(--sp-md); font-size: var(--fs-small); }
 .tabs button { padding: var(--sp-sm) var(--sp-lg); border: 1px solid var(--color-neutral-300); background: #fff; border-radius: var(--radius-md); font-size: var(--fs-small); }
 .tabs button.active { background: var(--color-primary-500); color: #fff; border-color: var(--color-primary-500); }
 .group { background: #fff; border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); overflow: hidden; margin-bottom: var(--sp-md); }

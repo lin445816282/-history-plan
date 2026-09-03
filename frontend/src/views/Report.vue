@@ -20,6 +20,7 @@
         <div class="meta-item"><span class="k">提示词版本</span><span class="v">{{ meta.promptVersion || '—' }}</span></div>
         <div class="meta-item"><span class="k">模型</span><span class="v">{{ meta.modelVersion || '—' }}</span></div>
       </div>
+      <p class="motto-line serif">谋事在人，顺时知变</p>
     </div>
 
     <!-- 低可信度警告 -->
@@ -32,6 +33,7 @@
       <div class="summary-head">
         <span class="summary-title">⏱ 一分钟速览</span>
         <div class="voice-controls">
+          <span v-if="isPlaying" class="voice-wave"><i></i><i></i><i></i></span>
           <button class="voice-btn" @click="toggleVoice">{{ voiceState }}</button>
           <button v-if="voiceState !== '🔊 语音播报'" class="voice-btn stop" @click="stopVoice">⏹ 停止</button>
         </div>
@@ -202,16 +204,19 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import TodoTracker from '../components/TodoTracker.vue'
 import ParameterTuning from '../components/ParameterTuning.vue'
-import { getSnapshot, getProfile } from '../services/profile-service.js'
+import { getSnapshot, getProfile, listReviews } from '../services/profile-service.js'
+import { FIELD_GROUPS } from '../constants/profile-fields.js'
 
 const route = useRoute()
 const snapshot = ref(null)
 const report = ref(null)
 const profileName = ref('')
+const reviews = ref([])
 const voiceState = ref('🔊 语音播报')
 let voicePlaying = false
 let voicePaused = false
 let voiceStopRequested = false
+const isPlaying = computed(() => voiceState.value === '⏸️ 暂停')
 
 function summaryText() {
   const s = report.value?.summary || {}
@@ -265,6 +270,55 @@ async function load() {
   report.value = snapshot.value.fullReport
   const p = await getProfile(snapshot.value.profileId)
   profileName.value = p?.name || ''
+  reviews.value = await listReviews(snapshot.value.id)
+}
+
+function profileToMarkdown() {
+  const p = snapshot.value?.profileSnapshot || {}
+  if (!Object.keys(p).length) return ''
+  const lines = ['## 人物档案']
+  FIELD_GROUPS.forEach(g => {
+    const filled = g.fields.filter(f => (p[f.key] || '').toString().trim())
+    if (filled.length) {
+      lines.push(`### ${g.label}`)
+      filled.forEach(f => lines.push(`- ${f.label}：${(p[f.key] || '').toString().trim()}`))
+    }
+  })
+  lines.push('')
+  return lines.join('\n')
+}
+
+function metaToMarkdown() {
+  const m = meta.value || {}
+  const lines = ['## 推演快照元信息']
+  lines.push(`- 推演编号：${report.value?.reportId || '—'}`)
+  lines.push(`- 推演时间：${snapshot.value?.timestamp || report.value?.timestamp || '—'}`)
+  lines.push(`- 档案完整度：${m.completenessScore ?? '—'}%`)
+  lines.push(`- 可信度评级：${m.credibilityRating || '—'}`)
+  lines.push(`- 一致性系数：${m.consistencyCoefficient || '—'}`)
+  lines.push(`- 知识库版本：${m.knowledgeVersion || '—'}`)
+  lines.push(`- 提示词版本：${m.promptVersion || '—'}`)
+  lines.push(`- 模型版本：${m.modelVersion || '—'}`)
+  lines.push('')
+  return lines.join('\n')
+}
+
+function reviewToMarkdown() {
+  const rv = reviews.value[0]
+  if (!rv) return ''
+  const lines = ['## 复盘笔记']
+  if (rv.actualEvents) lines.push(`### 现实发生情况\n${rv.actualEvents}\n`)
+  if (rv.humanFactors) lines.push(`### 人为抉择因素\n${rv.humanFactors}\n`)
+  if (rv.externalFactors) lines.push(`### 外部时运变局\n${rv.externalFactors}\n`)
+  if (rv.selfCompassion) lines.push(`### 自我同情引导\n${rv.selfCompassion}\n`)
+  const dr = rv.deviationReport
+  if (dr && (dr.accurate?.length || dr.deviated?.length)) {
+    lines.push('### 偏差自检报告')
+    if (dr.accurate?.length) lines.push(`#### ✅ 预测准确项\n${dr.accurate.map(a => `- ${a}`).join('\n')}\n`)
+    if (dr.deviated?.length) lines.push(`#### ❌ 预测偏差项\n${dr.deviated.map(d => `- ${d.item || d}（${d.reason || '未注明原因'}）`).join('\n')}\n`)
+    if (dr.userCorrection) lines.push(`#### 用户修正\n${dr.userCorrection}\n`)
+  }
+  return lines.join('\n')
 }
 
 function reportToMarkdown() {
@@ -274,6 +328,8 @@ function reportToMarkdown() {
   lines.push(`# 推演报告 ${r.reportId || ''}`)
   lines.push(`> 生成时间：${r.timestamp || ''}`)
   lines.push('')
+  lines.push(metaToMarkdown())
+  lines.push(profileToMarkdown())
   if (r.summary) {
     lines.push('## 一分钟速览')
     Object.values(r.summary).forEach(v => v && lines.push(v))
@@ -292,8 +348,9 @@ function reportToMarkdown() {
   lines.push('## 分阶段行动计划')
   ;(r.actionPlan?.shortTerm || []).forEach((s, i) => lines.push(`${i + 1}. ${s}`))
   lines.push('')
+  lines.push(reviewToMarkdown())
   if (r.disclaimer?.historicalDisclaimer) lines.push(`> ${r.disclaimer.historicalDisclaimer}`)
-  return lines.join('\n')
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n')
 }
 
 function exportMarkdown() {
@@ -382,6 +439,12 @@ onMounted(load)
 .btn.ghost { background: #fff; border: 1px solid var(--color-neutral-300); color: var(--color-neutral-700); }
 .voice-controls { display: flex; gap: var(--sp-sm); align-items: center; }
 .voice-btn.stop { border-color: var(--color-error); color: var(--color-error); }
+.voice-wave { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; }
+.voice-wave i { width: 3px; height: 4px; background: var(--color-primary-500); border-radius: 2px; animation: voice-wave 1s ease-in-out infinite; }
+.voice-wave i:nth-child(2) { animation-delay: 0.2s; }
+.voice-wave i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes voice-wave { 0%, 100% { height: 4px; } 50% { height: 14px; } }
+.motto-line { text-align: center; color: var(--color-primary-500); margin-top: var(--sp-sm); font-size: var(--fs-small); }
 
 @media print {
   .breadcrumb, .toolbar, .voice-controls { display: none !important; }
