@@ -21,6 +21,9 @@ export const parseProfile = (text) => post('/parse', { text })
 // 档案 + 知识上下文 → 推演报告
 export const deduce = (profile, industry) => post('/deduce', { profile, industry })
 
+// 参数微调·快速重算 —— 复用原推演上下文，增量更新评分/风险
+export const recalc = (profile, paths, adjustments) => post('/recalc', { profile, paths, adjustments })
+
 // 健康检查
 export async function health() {
   const res = await fetch(API_BASE + '/health')

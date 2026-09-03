@@ -151,6 +151,18 @@ class DeduceRequest(BaseModel):
     industry: Optional[str] = None
 
 
+class Adjustment(BaseModel):
+    field: str
+    label: str
+    delta: float = Field(..., ge=-0.5, le=0.5)
+
+
+class RecalcRequest(BaseModel):
+    profile: dict = Field(...)
+    paths: list[dict] = Field(...)
+    adjustments: list[Adjustment] = Field(...)
+
+
 # ---------- 端点 ----------
 @app.get("/api/health")
 def health():
@@ -236,6 +248,66 @@ async def deduce(req: DeduceRequest):
         _simhash_cache[key] = {"ts": time.time(), "report": report}
 
     return report
+
+
+@app.post("/api/recalc")
+async def recalc(req: RecalcRequest):
+    """参数微调·快速重算 —— 复用原推演上下文，仅增量更新受影响的路径评分与风险提示"""
+    if not DEEPSEEK_API_KEY:
+        raise HTTPException(status_code=503, detail="大模型 API Key 未配置")
+    enforce_quota()
+    _request_log.append(time.time())
+
+    if not req.adjustments:
+        raise HTTPException(status_code=400, detail="请至少调整一个变量后再重算")
+
+    prompt = load_prompt("recalc_prompt_v1.7.txt")
+
+    # 提取档案核心资源现状简述（供模型判断影响方向）
+    res_keys = {
+        "financialResources": "资金储备",
+        "networkResources": "人脉资源",
+        "timeResources": "时间投入",
+        "toolResources": "工具/技术",
+    }
+    profile_summary = "；".join(
+        f"{label}:{req.profile.get(k) or '未填写'}"
+        for k, label in res_keys.items()
+    )
+
+    user_content = json.dumps(
+        {
+            "paths": req.paths,
+            "adjustments": [a.dict() for a in req.adjustments],
+            "profileSummary": profile_summary,
+        },
+        ensure_ascii=False,
+    )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    raw = await call_llm(messages, temperature=0.3)
+
+    block = hard_validate(raw)
+    if block:
+        raise HTTPException(status_code=400, detail=block)
+
+    try:
+        result = parse_json_safe(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="重算结果格式异常，请重试")
+
+    # 后端兜底：强制 delta 保留一位小数、修正浮点误差
+    for p in result.get("paths", []):
+        orig = p.get("originalScore", 0)
+        new = p.get("newScore", orig)
+        p["originalScore"] = round(float(orig), 1)
+        p["newScore"] = round(float(new), 1)
+        p["delta"] = round(float(p.get("delta", p["newScore"] - p["originalScore"])), 1)
+
+    return result
 
 
 # ---------- 前端静态托管（Vue3 SPA，hash 路由） ----------

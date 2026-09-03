@@ -181,6 +181,9 @@
       <p class="disc-main serif">{{ report.disclaimer?.historicalDisclaimer }}</p>
     </section>
 
+    <!-- 参数微调·快速重算（行动计划跟踪器上方） -->
+    <ParameterTuning :snapshot="snapshot" />
+
     <!-- 待办跟踪器 -->
     <TodoTracker :snapshot="snapshot" />
 
@@ -198,6 +201,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import TodoTracker from '../components/TodoTracker.vue'
+import ParameterTuning from '../components/ParameterTuning.vue'
 import { getSnapshot, getProfile } from '../services/profile-service.js'
 
 const route = useRoute()
@@ -381,6 +385,7 @@ onMounted(load)
 
 @media print {
   .breadcrumb, .toolbar, .voice-controls { display: none !important; }
+  :deep(.tuning-card) { display: none !important; }
   .page { padding: 0; }
 }
 </style>
