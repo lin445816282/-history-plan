@@ -31,7 +31,10 @@
     <div class="summary-card">
       <div class="summary-head">
         <span class="summary-title">⏱ 一分钟速览</span>
-        <button class="voice-btn" @click="toggleVoice">{{ voiceState }}</button>
+        <div class="voice-controls">
+          <button class="voice-btn" @click="toggleVoice">{{ voiceState }}</button>
+          <button v-if="voiceState !== '🔊 语音播报'" class="voice-btn stop" @click="stopVoice">⏹ 停止</button>
+        </div>
       </div>
       <div class="summary-body">
         <p v-if="report.summary?.bestPath" class="s-line">{{ report.summary.bestPath }}</p>
@@ -184,6 +187,7 @@
     <!-- 底部工具栏 -->
     <div class="toolbar">
       <button class="btn ghost" @click="exportMarkdown">导出 Markdown</button>
+      <button class="btn ghost" @click="exportPdf">导出 PDF</button>
       <button class="btn ghost" @click="copyAll">复制全文</button>
       <router-link :to="`/review/${snapshot.id}`" class="btn ghost">进入复盘 →</router-link>
     </div>
@@ -201,6 +205,47 @@ const snapshot = ref(null)
 const report = ref(null)
 const profileName = ref('')
 const voiceState = ref('🔊 语音播报')
+let voicePlaying = false
+let voicePaused = false
+let voiceStopRequested = false
+
+function summaryText() {
+  const s = report.value?.summary || {}
+  return Object.values(s).filter(Boolean).join('。')
+}
+
+function toggleVoice() {
+  if (!('speechSynthesis' in window)) { alert('当前浏览器不支持语音播报'); return }
+  const synth = window.speechSynthesis
+  if (voicePlaying && !voicePaused) {
+    synth.pause()
+    voicePaused = true
+    voiceState.value = '▶️ 继续'
+  } else if (voicePlaying && voicePaused) {
+    synth.resume()
+    voicePaused = false
+    voiceState.value = '⏸️ 暂停'
+  } else {
+    const u = new SpeechSynthesisUtterance(summaryText())
+    u.lang = 'zh-CN'
+    u.rate = 1.0
+    u.onend = () => { voicePlaying = false; voicePaused = false; voiceState.value = '🔊 语音播报' }
+    voiceStopRequested = false
+    synth.cancel()
+    synth.speak(u)
+    voicePlaying = true
+    voicePaused = false
+    voiceState.value = '⏸️ 暂停'
+  }
+}
+
+function stopVoice() {
+  if (!('speechSynthesis' in window)) return
+  window.speechSynthesis.cancel()
+  voicePlaying = false
+  voicePaused = false
+  voiceState.value = '🔊 语音播报'
+}
 
 const meta = computed(() => report.value?.meta || {})
 const macro = computed(() => report.value?.macroAnalysis || {})
@@ -216,11 +261,6 @@ async function load() {
   report.value = snapshot.value.fullReport
   const p = await getProfile(snapshot.value.profileId)
   profileName.value = p?.name || ''
-}
-
-function toggleVoice() {
-  // M4 实现 Web Speech API，此处占位
-  alert('语音播报将在 M4 里程碑接入')
 }
 
 function reportToMarkdown() {
@@ -266,6 +306,10 @@ function exportMarkdown() {
 async function copyAll() {
   await navigator.clipboard.writeText(reportToMarkdown())
   alert('已复制到剪贴板')
+}
+
+function exportPdf() {
+  window.print()
 }
 
 onMounted(load)
@@ -332,4 +376,11 @@ onMounted(load)
 .toolbar { display: flex; gap: var(--sp-sm); margin-top: var(--sp-lg); flex-wrap: wrap; }
 .btn { padding: var(--sp-sm) var(--sp-md); border: none; border-radius: var(--radius-md); font-size: var(--fs-small); text-decoration: none; display: inline-block; }
 .btn.ghost { background: #fff; border: 1px solid var(--color-neutral-300); color: var(--color-neutral-700); }
+.voice-controls { display: flex; gap: var(--sp-sm); align-items: center; }
+.voice-btn.stop { border-color: var(--color-error); color: var(--color-error); }
+
+@media print {
+  .breadcrumb, .toolbar, .voice-controls { display: none !important; }
+  .page { padding: 0; }
+}
 </style>

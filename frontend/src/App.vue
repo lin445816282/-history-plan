@@ -27,4 +27,15 @@
 .nav-link { color: #fff; }
 .content { flex: 1; max-width: 960px; width: 100%; margin: 0 auto; padding: var(--sp-lg); }
 .global-footer { text-align: center; padding: var(--sp-lg); color: var(--color-neutral-500); font-size: var(--fs-caption); }
+
+@media print {
+  .global-nav, .global-footer { display: none !important; }
+  .content { max-width: none; padding: 0; }
+}
+
+@media (max-width: 480px) {
+  .global-nav { padding: 0 var(--sp-md); }
+  .brand { font-size: var(--fs-body); }
+  .motto { display: none; }
+}
 </style>

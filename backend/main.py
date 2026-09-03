@@ -13,6 +13,8 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import httpx
@@ -20,6 +22,7 @@ import httpx
 BASE_DIR = Path(__file__).resolve().parent
 PROMPT_DIR = BASE_DIR / "prompts"
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
+FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
 
 app = FastAPI(title="History-Plan 推演代理", version="1.7.0")
 
@@ -235,6 +238,15 @@ async def deduce(req: DeduceRequest):
     return report
 
 
+# ---------- 前端静态托管（Vue3 SPA，hash 路由） ----------
+if FRONTEND_DIST.exists():
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8012)
+    uvicorn.run(app, host="0.0.0.0", port=8023)

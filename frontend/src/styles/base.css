@@ -10,3 +10,11 @@ body {
 .serif { font-family: Georgia, "Noto Serif SC", serif; }
 button { cursor: pointer; min-height: var(--touch-min); }
 a { color: var(--color-primary-600); text-decoration: none; }
+
+/* 移动端基础适配（≥375px 可读，防横向滚动） */
+* { overflow-wrap: break-word; }
+img { max-width: 100%; }
+@media (max-width: 480px) {
+  body { font-size: 15px; }
+  .content { padding: var(--sp-md); }
+}
