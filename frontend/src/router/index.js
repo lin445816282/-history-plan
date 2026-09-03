@@ -8,6 +8,7 @@ const routes = [
   { path: '/report/:snapshotId', component: () => import('../views/Report.vue') },
   { path: '/review/:snapshotId', component: () => import('../views/Review.vue') },
   { path: '/deviation', component: () => import('../views/DeviationDashboard.vue') },
+  { path: '/knowledge', component: () => import('../views/KnowledgeBase.vue') },
   { path: '/settings', component: () => import('../views/Settings.vue') },
 ]
 

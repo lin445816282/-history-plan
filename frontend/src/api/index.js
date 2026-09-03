@@ -45,3 +45,10 @@ export async function health() {
   const res = await fetch(API_BASE + '/health')
   return res.json()
 }
+
+// 内置历史知识库（只读）
+export async function fetchKnowledge() {
+  const res = await fetch(API_BASE + '/knowledge')
+  if (!res.ok) throw new Error('知识库加载失败 ' + res.status)
+  return res.json()
+}

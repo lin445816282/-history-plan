@@ -344,6 +344,14 @@ def health():
     }
 
 
+@app.get("/api/knowledge")
+def knowledge():
+    """返回内置历史知识库（只读），含版本号与全部案例"""
+    kb = load_knowledge()
+    cases = kb.get("cases", [])
+    return {"version": KNOWLEDGE_VERSION, "count": len(cases), "cases": cases}
+
+
 @app.post("/api/parse")
 async def parse(req: ParseRequest):
     """自然语言 → 结构化档案预览（解析 Prompt，JSON mode）"""
