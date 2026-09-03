@@ -14,11 +14,36 @@
         <button class="btn primary" :disabled="deducing" @click="startDeduce">
           {{ deducing ? '推演中…' : '🔮 开始推演' }}
         </button>
+        <button class="btn ghost" @click="compareOpen = !compareOpen">⚖️ 对比推演</button>
         <button class="btn ghost" @click="viewMode = viewMode === 'view' ? 'edit' : 'view'">
           {{ viewMode === 'view' ? '✏️ 编辑' : '完成' }}
         </button>
         <button class="btn ghost" @click="onDuplicate">⧉ 复制</button>
         <button class="btn ghost danger" @click="onDelete">🗑 删除</button>
+      </div>
+    </div>
+
+    <!-- 对比推演面板 -->
+    <div v-if="compareOpen" class="compare-panel">
+      <h3 class="compare-title">⚖️ 二选一对比推演</h3>
+      <p class="compare-hint">输入两个具体选项，系统对比可行性、得失与风险。</p>
+      <div class="compare-inputs">
+        <input v-model="compareA" class="compare-input" placeholder="选项 A（如：全职创业开网店）" />
+        <input v-model="compareB" class="compare-input" placeholder="选项 B（如：保留工作兼职试水）" />
+      </div>
+      <div class="compare-actions">
+        <button class="btn primary" :disabled="comparing" @click="runCompare">{{ comparing ? '对比中…' : '开始对比' }}</button>
+        <button class="btn ghost" @click="compareOpen = false">关闭</button>
+      </div>
+      <div v-if="compareResult" class="compare-result">
+        <div v-for="(o, i) in compareResult.options" :key="i" class="compare-opt">
+          <div class="co-head"><span class="co-name">{{ o.name }}</span><span class="co-score">{{ o.score }} 分</span></div>
+          <div v-if="o.pros?.length" class="co-pros">✅ {{ o.pros.join('；') }}</div>
+          <div v-if="o.cons?.length" class="co-cons">⚠️ {{ o.cons.join('；') }}</div>
+          <div v-if="o.risk" class="co-risk">风险：{{ o.risk }}</div>
+        </div>
+        <div v-if="compareResult.keyDifference" class="co-diff">核心差异：{{ compareResult.keyDifference }}</div>
+        <div v-if="compareResult.recommendation" class="co-rec">💡 {{ compareResult.recommendation }}</div>
       </div>
     </div>
 
@@ -88,9 +113,9 @@ import { useRoute, useRouter } from 'vue-router'
 import TimelineView from '../components/TimelineView.vue'
 import { FIELD_GROUPS, completenessScore } from '../constants/profile-fields.js'
 import {
-  getProfile, updateProfile, duplicateProfile, deleteProfile, listSnapshots, saveSnapshot,
+  getProfile, updateProfile, duplicateProfile, deleteProfile, listSnapshots, saveSnapshot, listCustomCases,
 } from '../services/profile-service.js'
-import { deduce } from '../api/index.js'
+import { deduce, compare } from '../api/index.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -101,6 +126,11 @@ const viewMode = ref('view')
 const editForm = reactive({})
 const deducing = ref(false)
 const openGroups = ref(new Set(FIELD_GROUPS.filter(g => g.core).map(g => g.key)))
+const compareOpen = ref(false)
+const compareA = ref('')
+const compareB = ref('')
+const comparing = ref(false)
+const compareResult = ref(null)
 
 const score = computed(() => profile.value ? completenessScore(profile.value) : 0)
 const scoreCls = computed(() => score.value < 60 ? 'low' : '')
@@ -149,6 +179,20 @@ async function onDelete() {
   router.push('/profiles')
 }
 
+async function runCompare() {
+  if (!compareA.value.trim() || !compareB.value.trim()) { alert('请填写选项 A 和选项 B'); return }
+  comparing.value = true
+  compareResult.value = null
+  try {
+    const customCases = await listCustomCases()
+    compareResult.value = await compare(profile.value, compareA.value.trim(), compareB.value.trim(), customCases)
+  } catch (e) {
+    alert('对比推演失败：' + e.message)
+  } finally {
+    comparing.value = false
+  }
+}
+
 async function startDeduce() {
   // 完整度<60% 强制引导补全（提供「前往补全」/「仍要推演」两选项）
   if (score.value < 60) {
@@ -171,7 +215,8 @@ async function startDeduce() {
   }
   deducing.value = true
   try {
-    const report = await deduce(profile.value)
+    const customCases = await listCustomCases()
+    const report = await deduce(profile.value, undefined, customCases)
     // 后端返回完整报告对象（含 meta 等）
     const snapshotId = await saveSnapshot({
       profileId: profile.value.id,
@@ -232,4 +277,21 @@ onMounted(load)
 .h-time { color: var(--color-neutral-500); font-size: var(--fs-small); }
 .h-report { flex: 1; color: var(--color-neutral-900); }
 .h-arrow { color: var(--color-primary-500); }
+.compare-panel { background: #fff; border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); padding: var(--sp-lg); margin-bottom: var(--sp-lg); }
+.compare-title { font-size: var(--fs-h3); color: var(--color-primary-700); margin-bottom: var(--sp-xs); }
+.compare-hint { font-size: var(--fs-caption); color: var(--color-neutral-500); margin-bottom: var(--sp-md); }
+.compare-inputs { display: flex; flex-direction: column; gap: var(--sp-sm); margin-bottom: var(--sp-md); }
+.compare-input { width: 100%; padding: var(--sp-sm) var(--sp-md); font-size: var(--fs-body); border: 1px solid var(--color-neutral-300); border-radius: var(--radius-md); }
+.compare-input:focus { outline: none; border-color: var(--color-primary-500); }
+.compare-actions { display: flex; gap: var(--sp-sm); margin-bottom: var(--sp-md); }
+.compare-result { border-top: 1px dashed var(--color-neutral-200); padding-top: var(--sp-md); }
+.compare-opt { background: var(--color-neutral-50); border-radius: var(--radius-md); padding: var(--sp-md); margin-bottom: var(--sp-sm); }
+.co-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-xs); }
+.co-name { font-size: var(--fs-body); font-weight: 600; color: var(--color-neutral-900); }
+.co-score { font-size: var(--fs-h3); font-weight: 700; color: var(--color-primary-600); }
+.co-pros { font-size: var(--fs-small); color: var(--color-success); margin-bottom: 2px; }
+.co-cons { font-size: var(--fs-small); color: var(--color-warning); margin-bottom: 2px; }
+.co-risk { font-size: var(--fs-small); color: var(--color-error); }
+.co-diff { font-size: var(--fs-small); color: var(--color-neutral-700); margin-bottom: var(--sp-xs); }
+.co-rec { font-size: var(--fs-body); color: var(--color-primary-700); font-weight: 600; }
 </style>

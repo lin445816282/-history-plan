@@ -5,6 +5,14 @@
       <button class="btn ghost sm" @click="addNew">＋ 新增待办</button>
     </div>
 
+    <div v-if="todos.length" class="tracker-progress">
+      <div class="progress-info">
+        <span>完成进度</span>
+        <span class="progress-num">{{ doneCount }}/{{ todos.length }}（{{ progressPct }}%）</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" :style="{ width: progressPct + '%' }"></div></div>
+    </div>
+
     <div v-if="todos.length === 0" class="empty-note">暂无待办行动项。</div>
 
     <div v-else class="todo-list">
@@ -36,7 +44,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { listTodos, saveTodo, updateTodo, deleteTodo, updateSnapshot } from '../services/profile-service.js'
 
 const props = defineProps({ snapshot: { type: Object, required: true } })
@@ -44,6 +52,9 @@ const props = defineProps({ snapshot: { type: Object, required: true } })
 const todos = ref([])
 const editingId = ref(null)
 const editText = ref('')
+
+const doneCount = computed(() => todos.value.filter(t => t.status === 'completed').length)
+const progressPct = computed(() => todos.value.length ? Math.round(doneCount.value / todos.value.length * 100) : 0)
 
 function fmt(iso) {
   if (!iso) return ''
@@ -130,6 +141,11 @@ onMounted(ensureTodos)
 .tracker { background: #fff; border: 1px solid var(--color-secondary-100); border-radius: var(--radius-lg); padding: var(--sp-lg); }
 .tracker-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-md); }
 .tracker-title { font-size: var(--fs-h3); color: var(--color-secondary-500); }
+.tracker-progress { margin-bottom: var(--sp-md); }
+.progress-info { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-small); color: var(--color-neutral-700); margin-bottom: var(--sp-xs); }
+.progress-num { font-weight: 600; color: var(--color-secondary-500); }
+.progress-bar { height: 8px; background: var(--color-neutral-100); border-radius: var(--radius-sm); overflow: hidden; }
+.progress-fill { height: 100%; background: var(--color-secondary-500); border-radius: var(--radius-sm); transition: width 0.3s ease; }
 .btn { padding: var(--sp-sm) var(--sp-md); border: none; border-radius: var(--radius-md); font-size: var(--fs-small); }
 .btn.ghost { background: #fff; border: 1px solid var(--color-neutral-300); color: var(--color-neutral-700); }
 .btn.sm { padding: var(--sp-xs) var(--sp-sm); }

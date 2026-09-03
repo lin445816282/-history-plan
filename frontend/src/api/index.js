@@ -29,13 +29,16 @@ export function setProvider(p) {
 export const parseProfile = (text) => post('/parse', { text, provider: getProvider() })
 
 // 档案 + 知识上下文 → 推演报告
-export const deduce = (profile, industry) => post('/deduce', { profile, industry, provider: getProvider() })
+export const deduce = (profile, industry, customCases) => post('/deduce', { profile, industry, customCases, provider: getProvider() })
 
 // 参数微调·快速重算 —— 复用原推演上下文，增量更新评分/风险
 export const recalc = (profile, paths, adjustments) => post('/recalc', { profile, paths, adjustments, provider: getProvider() })
 
 // 推演偏差自检 —— 对比预测与现实，LLM 输出准确项/偏差项/原因
 export const deviation = (predictions, actualEvents) => post('/deviation', { predictions, actualEvents, provider: getProvider() })
+
+// 二选一专项对比推演
+export const compare = (profile, optionA, optionB, customCases) => post('/compare', { profile, optionA, optionB, customCases, provider: getProvider() })
 
 // 健康检查
 export async function health() {

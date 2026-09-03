@@ -5,7 +5,7 @@
 
 export const DB_CONFIG = {
   name: 'HistoryPlanDB',
-  version: 3,
+  version: 4,
   stores: {
     profiles: {
       keyPath: 'id',
@@ -50,6 +50,13 @@ export const DB_CONFIG = {
       indexes: [
         { name: 'by_timestamp', keyPath: 'timestamp' },
         { name: 'by_version', keyPath: 'version' }
+      ]
+    },
+    customCases: {
+      keyPath: 'id',
+      autoIncrement: true,
+      indexes: [
+        { name: 'by_createdAt', keyPath: 'createdAt' }
       ]
     }
   }
@@ -141,6 +148,19 @@ export const MODELS = {
     version: '1.7.0',            // 备份数据版本
     data: {},                    // 完整数据对象（含profiles/snapshots/reviews/todos）
     size: 0                      // JSON文件大小（KB）
+  },
+
+  customCases: {
+    id: null,                    // 自增
+    name: '',                    // 案例人物名
+    type: 'modern',              // 'ancient' | 'modern'
+    industry: '',                // 所属行业（近现代）
+    era: '',                     // 时代背景
+    context: '',                 // 背景注解
+    principle: '',               // 古今转化行动原则（≤50字）
+    lesson: '',                  // 教训/启示
+    createdAt: '',               // ISO 时间戳
+    updatedAt: ''                // ISO 时间戳
   }
 };
 
@@ -166,6 +186,12 @@ export const MIGRATIONS = {
       // 新增backups store
       // 扩展reviews增加deviationReport字段
     }
+  },
+  '4': {
+    description: 'V2: 新增 customCases（用户自定义历史案例）',
+    upgrade: (db) => {
+      // 新增 customCases store
+    }
   }
 };
 
@@ -175,5 +201,6 @@ export const DEFAULT_DATA = {
   snapshots: [],
   reviews: [],
   todos: [],
-  backups: []
+  backups: [],
+  customCases: []
 };

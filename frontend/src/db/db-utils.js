@@ -168,14 +168,16 @@ export class HistoryPlanDB {
     const snapshots = await this.getAll('snapshots');
     const reviews = await this.getAll('reviews');
     const todos = await this.getAll('todos');
+    const customCases = await this.getAll('customCases');
     
     return {
-      version: '1.7.0',
+      version: '2.0.0',
       exportedAt: new Date().toISOString(),
       profiles,
       snapshots,
       reviews,
-      todos
+      todos,
+      customCases
     };
   }
 
@@ -201,8 +203,8 @@ export class HistoryPlanDB {
       }
     }
     
-    // 类似处理 snapshots, reviews, todos
-    for (const storeName of ['snapshots', 'reviews', 'todos']) {
+    // 类似处理 snapshots, reviews, todos, customCases
+    for (const storeName of ['snapshots', 'reviews', 'todos', 'customCases']) {
       for (const item of data[storeName] || []) {
         try {
           const existing = await this.get(storeName, item.id);

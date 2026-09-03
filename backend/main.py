@@ -73,6 +73,7 @@ PROMPT_VERSION = "p-" + _content_version([
     PROMPT_DIR / "recalc_prompt_v1.7.txt",
     PROMPT_DIR / "consistency_prompt_v1.7.txt",
     PROMPT_DIR / "deviation_prompt_v2.txt",
+    PROMPT_DIR / "compare_prompt_v2.txt",
 ])
 KNOWLEDGE_VERSION = "k-" + _content_version([KNOWLEDGE_DIR / "cases.json"])
 
@@ -286,6 +287,7 @@ class DeduceRequest(BaseModel):
     profile: dict = Field(...)
     industry: Optional[str] = None
     provider: Optional[str] = None
+    customCases: list[dict] = Field(default_factory=list)
 
 
 class Adjustment(BaseModel):
@@ -305,6 +307,14 @@ class DeviationRequest(BaseModel):
     predictions: list[str] = Field(..., min_length=1)
     actualEvents: str = Field(...)
     provider: Optional[str] = None
+
+
+class CompareRequest(BaseModel):
+    profile: dict = Field(...)
+    optionA: str = Field(..., min_length=1)
+    optionB: str = Field(..., min_length=1)
+    provider: Optional[str] = None
+    customCases: list[dict] = Field(default_factory=list)
 
 
 # ---------- 端点 ----------
@@ -367,13 +377,16 @@ async def deduce(req: DeduceRequest):
 
     # 行业自动识别 + 近现代案例优先注入
     industry = req.industry or detect_industry(req.profile)
-    ordered_cases = reorder_cases_by_industry(knowledge.get("cases", []), industry)
+    builtin_cases = knowledge.get("cases", [])
+    ordered_cases = reorder_cases_by_industry(builtin_cases, industry)
+    # 用户自定义案例排最前（优先对标），内置案例随后
+    combined_cases = list(req.customCases) + ordered_cases
 
     user_content = json.dumps(
         {
             "人物档案": req.profile,
             "行业标签": industry,
-            "历史知识库上下文": ordered_cases,
+            "历史知识库上下文": combined_cases,
         },
         ensure_ascii=False,
     )
@@ -512,6 +525,51 @@ async def deviation(req: DeviationRequest):
     result.setdefault("accurate", [])
     result.setdefault("deviated", [])
     result.setdefault("analysis", "")
+    return result
+
+
+@app.post("/api/compare")
+async def compare(req: CompareRequest):
+    """二选一专项对比推演 —— 对比两个选项的可行性/得失/风险，给出推荐"""
+    provider = resolve_provider(req.provider)
+    if not PROVIDERS[provider]["api_key"]:
+        raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
+    enforce_quota()
+    _request_log.append(time.time())
+
+    prompt = load_prompt("compare_prompt_v2.txt")
+    knowledge = load_knowledge()
+    industry = detect_industry(req.profile)
+    ordered_cases = reorder_cases_by_industry(knowledge.get("cases", []), industry)
+    combined_cases = list(req.customCases) + ordered_cases
+
+    user_content = json.dumps(
+        {
+            "人物档案": req.profile,
+            "选项A": req.optionA,
+            "选项B": req.optionB,
+            "历史知识库上下文": combined_cases,
+        },
+        ensure_ascii=False,
+    )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": user_content},
+    ]
+    raw = await call_llm(messages, temperature=0.5, provider=provider)
+
+    block = hard_validate(raw)
+    if block:
+        raise HTTPException(status_code=400, detail=block)
+
+    try:
+        result = parse_json_safe(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="对比推演结果格式异常，请重试")
+
+    result.setdefault("options", [])
+    result.setdefault("recommendation", "")
+    result.setdefault("keyDifference", "")
     return result
 
 

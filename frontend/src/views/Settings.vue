@@ -33,6 +33,38 @@
       <p v-else class="hint">正在检测…</p>
     </div>
 
+    <!-- 自定义历史案例 -->
+    <div class="block">
+      <h3>自定义历史案例</h3>
+      <p class="hint">添加你自己的对标案例，推演时会优先参考。</p>
+      <div v-if="customCases.length" class="case-list">
+        <div v-for="c in customCases" :key="c.id" class="case-item">
+          <div class="case-main">
+            <span class="case-name">{{ c.name }}</span>
+            <span class="case-tag">{{ c.industry || c.era || (c.type === 'ancient' ? '古代' : '近现代') }}</span>
+            <span class="case-principle">{{ c.principle }}</span>
+          </div>
+          <button class="icon-btn" title="删除" @click="removeCase(c)">✕</button>
+        </div>
+      </div>
+      <p v-else class="hint">暂无自定义案例。</p>
+      <div class="case-form">
+        <div class="case-row">
+          <input v-model="newCase.name" class="case-input" placeholder="人物名（如 稻盛和夫）" />
+          <select v-model="newCase.type" class="case-input">
+            <option value="modern">近现代</option>
+            <option value="ancient">古代</option>
+          </select>
+          <input v-model="newCase.industry" class="case-input" placeholder="行业（如 制造工匠）" />
+          <input v-model="newCase.era" class="case-input" placeholder="时代（如 平成时代）" />
+        </div>
+        <textarea v-model="newCase.context" class="case-input" rows="2" placeholder="背景注解"></textarea>
+        <textarea v-model="newCase.principle" class="case-input" rows="2" placeholder="古今转化行动原则（≤50字）"></textarea>
+        <textarea v-model="newCase.lesson" class="case-input" rows="2" placeholder="教训/启示"></textarea>
+        <button class="btn primary" @click="addCase">＋ 添加案例</button>
+      </div>
+    </div>
+
     <!-- 定位与边界 -->
     <div class="block disclaimer">
       <h3>系统定位</h3>
@@ -48,8 +80,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { exportAllData, importAllData } from '../services/profile-service.js'
+import { ref, computed, reactive, onMounted } from 'vue'
+import { exportAllData, importAllData, listCustomCases, saveCustomCase, deleteCustomCase } from '../services/profile-service.js'
 import { health, getProvider, setProvider } from '../api/index.js'
 
 const fileInput = ref(null)
@@ -57,11 +89,33 @@ const lastMsg = ref('')
 const healthInfo = ref(null)
 const selectedProvider = ref(getProvider())
 const providers = computed(() => healthInfo.value?.providers || {})
+const customCases = ref([])
+const newCase = reactive({ name: '', type: 'modern', industry: '', era: '', context: '', principle: '', lesson: '' })
 
 function chooseProvider(key) {
   selectedProvider.value = key
   setProvider(key)
   lastMsg.value = `已切换模型，下次推演/解析将使用 ${providers.value[key]?.name || key}。`
+}
+
+async function loadCases() {
+  customCases.value = await listCustomCases()
+}
+
+async function addCase() {
+  if (!newCase.name.trim()) { alert('请填写人物名'); return }
+  if (!newCase.principle.trim()) { alert('请填写古今转化行动原则'); return }
+  await saveCustomCase({ ...newCase })
+  newCase.name = newCase.industry = newCase.era = newCase.context = newCase.principle = newCase.lesson = ''
+  newCase.type = 'modern'
+  await loadCases()
+  lastMsg.value = '案例已添加，推演时会优先参考。'
+}
+
+async function removeCase(c) {
+  if (!confirm(`删除案例「${c.name}」？`)) return
+  await deleteCustomCase(c.id)
+  await loadCases()
 }
 
 function fmtDate(d) {
@@ -110,6 +164,7 @@ async function onImportFile(e) {
 }
 
 onMounted(async () => {
+  loadCases()
   try {
     healthInfo.value = await health()
   } catch (_) {
@@ -137,6 +192,18 @@ onMounted(async () => {
 .model-name { font-size: var(--fs-small); font-weight: 600; color: var(--color-neutral-900); }
 .model-tag { font-size: var(--fs-caption); color: var(--color-neutral-500); }
 .model-unconfigured { font-size: var(--fs-caption); color: var(--color-error); }
+.case-list { display: flex; flex-direction: column; gap: var(--sp-sm); margin-bottom: var(--sp-md); }
+.case-item { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); background: var(--color-neutral-50); border-radius: var(--radius-md); }
+.case-main { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.case-name { font-size: var(--fs-small); font-weight: 600; color: var(--color-neutral-900); }
+.case-tag { font-size: var(--fs-caption); color: var(--color-secondary-500, #4A6A8B); }
+.case-principle { font-size: var(--fs-caption); color: var(--color-neutral-500); }
+.case-form { display: flex; flex-direction: column; gap: var(--sp-sm); border-top: 1px dashed var(--color-neutral-200); padding-top: var(--sp-md); }
+.case-row { display: flex; gap: var(--sp-sm); flex-wrap: wrap; }
+.case-input { flex: 1; min-width: 120px; padding: var(--sp-xs) var(--sp-sm); font-size: var(--fs-small); border: 1px solid var(--color-neutral-300); border-radius: var(--radius-md); font-family: inherit; resize: vertical; }
+.case-input:focus { outline: none; border-color: var(--color-primary-500); }
+.icon-btn { min-width: 32px; min-height: 32px; padding: 0 var(--sp-sm); border: none; background: transparent; color: var(--color-neutral-500); border-radius: var(--radius-sm); font-size: var(--fs-small); cursor: pointer; }
+.icon-btn:hover { background: var(--color-neutral-100); color: var(--color-error); }
 .health-row { display: flex; gap: var(--sp-md); font-size: var(--fs-small); }
 .health-row .k { width: 90px; color: var(--color-neutral-500); }
 .health-row .v { color: var(--color-neutral-900); }

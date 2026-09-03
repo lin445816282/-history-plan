@@ -77,6 +77,23 @@ export async function listReviews(snapshotId) {
 }
 export function saveReview(data) { return db.add('reviews', data) }
 
+// ---------- 自定义历史案例 ----------
+export async function listCustomCases() {
+  const cases = await db.getAll('customCases')
+  return cases.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+}
+export async function saveCustomCase(data) {
+  const now = new Date().toISOString()
+  const c = { ...data, updatedAt: now }
+  if (c.id) {
+    await db.update('customCases', { ...c, createdAt: c.createdAt || now })
+    return c.id
+  }
+  c.createdAt = now
+  return db.add('customCases', c)
+}
+export function deleteCustomCase(id) { return db.delete('customCases', id) }
+
 // ---------- 备份 ----------
 export const exportAllData = () => db.exportAllData()
 export const importAllData = (data) => db.importAllData(data)
