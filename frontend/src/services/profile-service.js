@@ -53,6 +53,11 @@ export async function listSnapshots(profileId) {
 }
 export function getSnapshot(id) { return db.get('snapshots', id) }
 export function saveSnapshot(data) { return db.add('snapshots', data) }
+export async function updateSnapshot(id, data) {
+  const existing = await db.get('snapshots', id)
+  await db.update('snapshots', { ...existing, ...data })
+  return db.get('snapshots', id)
+}
 
 // ---------- 待办 ----------
 export async function listTodos(snapshotId) {
