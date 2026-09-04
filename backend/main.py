@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 
 import httpx
 
+import funnel
+
 BASE_DIR = Path(__file__).resolve().parent
 PROMPT_DIR = BASE_DIR / "prompts"
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
@@ -409,12 +411,12 @@ async def deduce(req: DeduceRequest):
     prompt = load_prompt("system_prompt_v1.7.txt")
     knowledge = load_knowledge()
 
-    # 行业自动识别 + 近现代案例优先注入
+    # 三级漏斗过滤知识库（行业自动识别 + 世道过滤 + 原型匹配 + 相关性 top-N）
     industry = req.industry or detect_industry(req.profile)
     builtin_cases = knowledge.get("cases", [])
-    ordered_cases = reorder_cases_by_industry(builtin_cases, industry)
-    # 用户自定义案例排最前（优先对标），内置案例随后
-    combined_cases = list(req.customCases) + ordered_cases
+    filtered_cases, funnel_stats = funnel.funnel_cases(req.profile, industry, builtin_cases)
+    # 用户自定义案例排最前（优先对标），漏斗后的内置案例随后
+    combined_cases = list(req.customCases) + filtered_cases
 
     user_content = json.dumps(
         {
@@ -469,6 +471,7 @@ async def deduce(req: DeduceRequest):
         "consistencyCoefficient": consistency,
         "detectedIndustry": industry,
         "softCheckWarnings": soft_warnings,
+        "funnelStats": funnel_stats,
     })
 
     # 后端权威覆盖 reportId/timestamp（LLM 生成的日期会幻觉，不可信）
@@ -589,8 +592,8 @@ async def compare(req: CompareRequest):
     prompt = load_prompt("compare_prompt_v2.txt")
     knowledge = load_knowledge()
     industry = detect_industry(req.profile)
-    ordered_cases = reorder_cases_by_industry(knowledge.get("cases", []), industry)
-    combined_cases = list(req.customCases) + ordered_cases
+    filtered_cases, _ = funnel.funnel_cases(req.profile, industry, knowledge.get("cases", []))
+    combined_cases = list(req.customCases) + filtered_cases
 
     user_content = json.dumps(
         {
