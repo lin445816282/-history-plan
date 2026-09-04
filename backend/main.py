@@ -147,6 +147,19 @@ def load_knowledge() -> dict:
     return {"version": KNOWLEDGE_VERSION, "cases": []}
 
 
+def gen_report_id() -> str:
+    """后端权威生成报告 ID（LLM 生成的 reportId 日期会幻觉，不可信）"""
+    import datetime as _dt
+    import uuid as _uuid
+    return f"HP-{_dt.datetime.now().strftime('%Y%m%d')}-{_uuid.uuid4().hex[:6].upper()}"
+
+
+def now_iso() -> str:
+    """后端权威生成 ISO 时间戳"""
+    import datetime as _dt
+    return _dt.datetime.now().isoformat(timespec="seconds")
+
+
 def simhash(text: str, bits: int = 64) -> str:
     tokens = re.findall(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z0-9]+", text)
     v = [0] * bits
@@ -389,6 +402,8 @@ async def deduce(req: DeduceRequest):
             reused = json.loads(json.dumps(cached["report"], ensure_ascii=False))
             reused.setdefault("meta", {})["reusedFromSimilar"] = True
             reused["meta"]["completenessScore"] = comp
+            reused["reportId"] = gen_report_id()
+            reused["timestamp"] = now_iso()
             return reused
 
     prompt = load_prompt("system_prompt_v1.7.txt")
@@ -455,6 +470,10 @@ async def deduce(req: DeduceRequest):
         "detectedIndustry": industry,
         "softCheckWarnings": soft_warnings,
     })
+
+    # 后端权威覆盖 reportId/timestamp（LLM 生成的日期会幻觉，不可信）
+    report["reportId"] = gen_report_id()
+    report["timestamp"] = now_iso()
 
     # 相似档案 SimHash 缓存（完整度>80% 才存储）
     if comp > 80:
