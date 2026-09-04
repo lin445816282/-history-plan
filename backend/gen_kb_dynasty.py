@@ -24,7 +24,7 @@ SYSTEM_PROMPT_TMPL = """你是一位中国历史人物推演案例编纂专家�
 - era: 时代（固定填「{era}」）
 - worldTag: 世道标签（乱世/变革世/太平世 三选一）
 - context: 现代白话简述（40-80字），点明此人的核心处境与最关键的一次抉择
-- ancientContext: 古代制度与环境背景（30-60字）
+- ancientContext: 所处时代的制度与环境背景（30-60字）
 - boundaryNote: 古今差异边界（20-40字，格式「古代靠X，现代靠Y」）
 - principle: 提炼的核心事理原则（15-30字）
 - outcome: success 或 failure（实事求是，不能全成功）
