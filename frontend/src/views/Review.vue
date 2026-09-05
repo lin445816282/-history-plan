@@ -64,7 +64,8 @@
     </div>
 
     <div class="actions">
-      <button class="btn ghost" @click="save">保存复盘</button>
+      <button class="btn ghost" @click="save">仅保存复盘</button>
+      <button class="btn primary" :disabled="continueLoading" @click="saveAndContinue">{{ continueLoading ? '🤖 再推演中…' : '💫 保存并再推演' }}</button>
     </div>
   </div>
 </template>
@@ -72,8 +73,8 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getSnapshot, listTodos, saveReview } from '../services/profile-service.js'
-import { deviation } from '../api/index.js'
+import { getSnapshot, listTodos, saveReview, saveSnapshot, getProfile } from '../services/profile-service.js'
+import { deviation, continueDeduce } from '../api/index.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -84,6 +85,7 @@ const form = reactive({ actualEvents: '', humanFactors: '', externalFactors: '',
 const predictions = ref([])
 const aiLoading = ref(false)
 const aiAnalysis = ref('')
+const continueLoading = ref(false)
 
 async function load() {
   snapshot.value = await getSnapshot(Number(route.params.snapshotId))
@@ -135,14 +137,14 @@ async function aiAnalyze() {
   }
 }
 
-async function save() {
+function buildReviewData() {
   const deviationReport = {
     accurate: predictions.value.filter(p => p.status === 'accurate').map(p => p.text),
     deviated: predictions.value.filter(p => p.status === 'deviated').map(p => ({ item: p.text, reason: p.reason || '未注明原因' })),
     userCorrection: form.userCorrection,
   }
   const now = new Date().toISOString()
-  await saveReview({
+  return {
     snapshotId: snapshot.value.id,
     profileId: snapshot.value.profileId,
     actualEvents: form.actualEvents,
@@ -152,9 +154,46 @@ async function save() {
     deviationReport,
     createdAt: now,
     updatedAt: now,
-  })
+  }
+}
+
+async function save() {
+  await saveReview(buildReviewData())
   alert('复盘已保存')
   router.push(`/report/${snapshot.value.id}`)
+}
+
+async function saveAndContinue() {
+  if (!form.actualEvents.trim()) { alert('请先填写「现实发生情况」再再推演'); return }
+  const reviewId = await saveReview(buildReviewData())
+  continueLoading.value = true
+  try {
+    const profile = await getProfile(snapshot.value.profileId)
+    const dr = buildReviewData().deviationReport
+    const deviationResult = {
+      accurate: dr.accurate,
+      deviated: dr.deviated,
+      analysis: aiAnalysis.value || '',
+    }
+    // 持仓式再推演：上次报告 + 偏差复盘 + 现实进展 → 校准后新报告
+    const newReport = await continueDeduce(profile, snapshot.value.fullReport, deviationResult, form.actualEvents)
+    const newSnapshotId = await saveSnapshot({
+      profileId: snapshot.value.profileId,
+      timestamp: new Date().toISOString(),
+      knowledgeVersion: newReport.meta?.knowledgeVersion || '',
+      promptVersion: newReport.meta?.promptVersion || '',
+      consistencyCoefficient: newReport.meta?.consistencyCoefficient || '中',
+      fullReport: newReport,
+      profileSnapshot: JSON.parse(JSON.stringify(profile)),
+      todoIds: [],
+      reviewId,
+    })
+    router.push(`/report/${newSnapshotId}`)
+  } catch (e) {
+    alert('再推演失败：' + e.message)
+  } finally {
+    continueLoading.value = false
+  }
 }
 
 onMounted(load)
@@ -185,8 +224,11 @@ onMounted(load)
 .btn.ai { background: var(--color-secondary-500, #4A6A8B); color: #fff; }
 .btn.ai:disabled { background: var(--color-neutral-300); cursor: not-allowed; }
 .ai-result { font-size: var(--fs-small); color: var(--color-neutral-700); font-style: italic; flex: 1; }
-.actions { display: flex; justify-content: flex-end; }
-.btn { padding: var(--sp-sm) var(--sp-xl); border: none; border-radius: var(--radius-md); font-size: var(--fs-body); }
+.actions { display: flex; justify-content: flex-end; gap: var(--sp-md); }
+.btn { padding: var(--sp-sm) var(--sp-xl); border: none; border-radius: var(--radius-md); font-size: var(--fs-body); cursor: pointer; }
 .btn.ghost { background: var(--color-primary-500); color: #fff; }
 .btn.ghost:hover { background: var(--color-primary-600); }
+.btn.primary { background: var(--color-accent-gold, #C9A227); color: #fff; }
+.btn.primary:hover { filter: brightness(1.05); }
+.btn.primary:disabled { background: var(--color-neutral-300); cursor: not-allowed; }
 </style>

@@ -41,6 +41,9 @@ export const deviation = (predictions, actualEvents) => post('/deviation', { pre
 // 二选一专项对比推演
 export const compare = (profile, optionA, optionB, customCases) => post('/compare', { profile, optionA, optionB, customCases, provider: getProvider() })
 
+// 持仓式增量再推演 —— 基于上次报告 + 偏差复盘 + 现实进展，输出校准后的新报告
+export const continueDeduce = (profile, previousReport, deviation, actualEvents) => post('/continue', { profile, previousReport, deviation, actualEvents, provider: getProvider() })
+
 // 健康检查
 export async function health() {
   const res = await fetch(API_BASE + '/health')
