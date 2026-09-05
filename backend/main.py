@@ -92,6 +92,14 @@ CORE_FIELDS = [
     "mediumTermGoal", "longTermGoal", "keyDecisions", "externalChanges",
 ]
 
+# 4 个标准路径名 → 关键词别名（用于归一化 LLM 输出的带括号/别名变体，保证轨迹图聚合稳定）
+PATH_NAME_ALIASES = {
+    "进取突破": ["进取", "突破", "激进", "出击", "搏"],
+    "折中改良": ["折中", "改良", "妥协", "平衡", "渐进"],
+    "守正待时": ["守正", "守成", "稳健", "保守", "等待", "待时", "守势", "蛰伏"],
+    "冒险开拓": ["冒险", "开拓", "破局", "闯", "allin", "孤注"],
+}
+
 # 近现代行业人物子库的 6 大领域 → 关键词（用于档案文本自动识别行业，优先注入匹配案例）
 INDUSTRY_KEYWORDS = {
     "科技互联网": ["科技", "互联网", "程序员", "软件", "人工智能", "AI", "电商", "数字", "App", "产品经理", "代码", "IT", "开发", "技术", "网络"],
@@ -188,6 +196,30 @@ def find_similar_cached(device_id: str, simhash_key: str, max_hamming: int = 3, 
         if now - v["ts"] < max_age and hamming_distance(simhash_key, k) <= max_hamming:
             return v
     return None
+
+
+def normalize_path_names(report: dict) -> dict:
+    """路径名归一化：把 LLM 输出的带括号/别名变体统一映射到 4 个固定标准名。
+
+    保证轨迹图聚合与跨期对比稳定（否则「守正待时」与「守正待时（稳健守成）」会被拆成两条线）。
+    """
+    paths = report.get("paths")
+    if not isinstance(paths, list):
+        return report
+    for p in paths:
+        if not isinstance(p, dict):
+            continue
+        raw = str(p.get("name", "") or "").strip()
+        if not raw:
+            continue
+        matched = None
+        for std, keywords in PATH_NAME_ALIASES.items():
+            if any(k in raw for k in keywords):
+                matched = std
+                break
+        if matched and p.get("name") != matched:
+            p["name"] = matched
+    return report
 
 
 def soft_validate(report: dict) -> list[str]:
@@ -351,7 +383,11 @@ async def call_llm(messages: list, temperature: float = 0.7, provider: str = "de
 
 
 async def run_consistency(profile: dict, paths: list[dict], provider: str = "deepseek") -> str:
-    """3 次低温并行推理，返回一致性系数（各路径评分标准差平均值，字符串；异常时回退 '中'）"""
+    """3 次低温并行推理，返回一致性等级「高/中/低」。
+
+    一致性 = 3 次低温推理对各路径评分的吻合程度（标准差越小越一致），
+    映射为三档字符串，与默认值「中」及前端渲染语义统一。
+    """
     prompt = load_prompt("consistency_prompt_v1.7.txt")
     path_names = [p.get("name", "") for p in paths]
     user_content = json.dumps({"人物档案": profile, "路径列表": path_names}, ensure_ascii=False)
@@ -383,7 +419,13 @@ async def run_consistency(profile: dict, paths: list[dict], provider: str = "dee
     stds = [statistics.stdev(s) for s in name_to_scores.values() if len(s) >= 3]
     if not stds:
         return "中"
-    return f"{sum(stds) / len(stds):.2f}"
+    avg_std = sum(stds) / len(stds)
+    # 标准差越小 = 3 次低温推理越吻合 = 一致性越高（语义与字段名一致）
+    if avg_std < 0.4:
+        return "高"
+    if avg_std < 0.9:
+        return "中"
+    return "低"
 
 
 # ---------- 请求模型 ----------
@@ -534,6 +576,7 @@ async def deduce(req: DeduceRequest, x_device_id: Optional[str] = Header(None, a
     user_content = json.dumps(
         {
             "人物档案": req.profile,
+            "档案完整度": f"{comp}%（{'信息严重不足' if comp < 40 else '信息较完整' if comp < 70 else '信息充分'}）",
             "行业标签": industry,
             "历史知识库上下文": combined_cases,
         },
@@ -556,6 +599,9 @@ async def deduce(req: DeduceRequest, x_device_id: Optional[str] = Header(None, a
         report = parse_json_safe(raw)
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="推演结果格式异常，请重试")
+
+    # 路径名归一化（在软校验与一致性系数之前执行，确保后续都基于标准名）
+    report = normalize_path_names(report)
 
     # 第二层软校验（规则引擎，记录警告）
     soft_warnings = soft_validate(report)
@@ -755,6 +801,7 @@ async def continue_deduce(req: ContinueRequest, x_device_id: Optional[str] = Hea
     user_content = json.dumps(
         {
             "人物档案": req.profile,
+            "档案完整度": f"{comp}%（{'信息严重不足' if comp < 40 else '信息较完整' if comp < 70 else '信息充分'}）",
             "行业标签": industry,
             "历史知识库上下文": combined_cases,
             "上次推演报告": req.previousReport,
@@ -780,6 +827,9 @@ async def continue_deduce(req: ContinueRequest, x_device_id: Optional[str] = Hea
         report = parse_json_safe(raw)
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="校准推演结果格式异常，请重试")
+
+    # 路径名归一化（确保校准推演与标准推演的路径名对齐，跨期对比稳定）
+    report = normalize_path_names(report)
 
     # 第二层软校验
     soft_warnings = soft_validate(report)
