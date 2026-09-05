@@ -13,7 +13,7 @@ import statistics
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -134,8 +134,8 @@ SENSITIVE_WORDS = [
     "建议起诉", "建议索赔", "律师函", "应诉", "法律意见书",
 ]
 
-_request_log: list[float] = []
-_simhash_cache: dict[str, dict] = {}
+_quota_log: dict[str, list[float]] = {}  # deviceId -> 最近24h请求时间戳（按用户隔离，非全局共享）
+_simhash_cache: dict[str, dict] = {}      # key 含 deviceId 前缀，跨用户不互相命中
 _case_stats: dict[str, int] = {}       # 案例名 -> 引用次数（内存统计，重启重置）
 _review_queue: list[dict] = []         # 软校验待审核队列（内存，最多 100 条）
 
@@ -179,11 +179,11 @@ def hamming_distance(a: str, b: str) -> int:
     return sum(c1 != c2 for c1, c2 in zip(a, b))
 
 
-def find_similar_cached(key: str, max_hamming: int = 3, max_age: int = 7 * 86400) -> Optional[dict]:
-    """在缓存中查找 7 天内、汉明距离 ≤ max_hamming（≈95% 相似）的相似档案推演"""
+def find_similar_cached(device_id: str, simhash_key: str, max_hamming: int = 3, max_age: int = 7 * 86400) -> Optional[dict]:
+    """在指定 deviceId 的缓存子集里查找 7 天内、汉明距离 ≤ max_hamming 的相似档案推演（跨用户隔离）"""
     now = time.time()
-    for k, v in _simhash_cache.items():
-        if now - v["ts"] < max_age and hamming_distance(key, k) <= max_hamming:
+    for k, v in _simhash_cache.get(device_id, {}).items():
+        if now - v["ts"] < max_age and hamming_distance(simhash_key, k) <= max_hamming:
             return v
     return None
 
@@ -236,11 +236,14 @@ def hard_validate(text: str) -> Optional[str]:
     return None
 
 
-def enforce_quota() -> None:
+def enforce_quota(device_id: str = "anonymous") -> None:
+    """按 deviceId 隔离的每日配额（每用户独立 100 次，非全局共享）"""
     now = time.time()
-    _request_log[:] = [t for t in _request_log if now - t < 86400]
-    if len(_request_log) >= DAILY_QUOTA:
+    log = _quota_log.setdefault(device_id, [])
+    log[:] = [t for t in log if now - t < 86400]
+    if len(log) >= DAILY_QUOTA:
         raise HTTPException(status_code=429, detail="今日推演额度已用完，请联系管理员")
+    log.append(now)
 
 
 def parse_json_safe(text: str) -> dict:
@@ -399,20 +402,20 @@ async def parse(req: ParseRequest):
 
 
 @app.post("/api/deduce")
-async def deduce(req: DeduceRequest):
+async def deduce(req: DeduceRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
     """档案 + 知识上下文 → 推演报告（推演 Prompt，JSON mode + 双层校验 + 一致性系数）"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota()
-    _request_log.append(time.time())
+    enforce_quota(x_device_id or "anonymous")
 
     comp = completeness(req.profile)
 
     # 相似档案 SimHash 缓存复用（完整度>80% 且命中近期相似档案时直接返回）
+    device_id = x_device_id or "anonymous"
     if comp > 80:
-        key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
-        cached = find_similar_cached(key)
+        simhash_key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
+        cached = find_similar_cached(device_id, simhash_key)
         if cached:
             reused = json.loads(json.dumps(cached["report"], ensure_ascii=False))
             reused.setdefault("meta", {})["reusedFromSimilar"] = True
@@ -491,10 +494,10 @@ async def deduce(req: DeduceRequest):
     report["reportId"] = gen_report_id()
     report["timestamp"] = now_iso()
 
-    # 相似档案 SimHash 缓存（完整度>80% 才存储）
+    # 相似档案 SimHash 缓存（完整度>80% 才存储，按 deviceId 隔离）
     if comp > 80:
-        key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
-        _simhash_cache[key] = {"ts": time.time(), "report": report}
+        simhash_key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
+        _simhash_cache.setdefault(device_id, {})[simhash_key] = {"ts": time.time(), "report": report}
 
     # 案例引用频次统计
     record_case_references(report)
@@ -503,13 +506,12 @@ async def deduce(req: DeduceRequest):
 
 
 @app.post("/api/recalc")
-async def recalc(req: RecalcRequest):
+async def recalc(req: RecalcRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
     """参数微调·快速重算 —— 复用原推演上下文，仅增量更新受影响的路径评分与风险提示"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota()
-    _request_log.append(time.time())
+    enforce_quota(x_device_id or "anonymous")
 
     if not req.adjustments:
         raise HTTPException(status_code=400, detail="请至少调整一个变量后再重算")
@@ -564,13 +566,12 @@ async def recalc(req: RecalcRequest):
 
 
 @app.post("/api/deviation")
-async def deviation(req: DeviationRequest):
+async def deviation(req: DeviationRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
     """推演偏差自检 —— 对比三条预测与现实情况，LLM 输出准确项/偏差项/原因"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota()
-    _request_log.append(time.time())
+    enforce_quota(x_device_id or "anonymous")
 
     prompt = load_prompt("deviation_prompt_v2.txt")
     user_content = json.dumps(
@@ -594,13 +595,12 @@ async def deviation(req: DeviationRequest):
 
 
 @app.post("/api/compare")
-async def compare(req: CompareRequest):
+async def compare(req: CompareRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
     """二选一专项对比推演 —— 对比两个选项的可行性/得失/风险，给出推荐"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota()
-    _request_log.append(time.time())
+    enforce_quota(x_device_id or "anonymous")
 
     prompt = load_prompt("compare_prompt_v2.txt")
     knowledge = load_knowledge()
@@ -639,13 +639,12 @@ async def compare(req: CompareRequest):
 
 
 @app.post("/api/continue")
-async def continue_deduce(req: ContinueRequest):
+async def continue_deduce(req: ContinueRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
     """持仓式增量再推演 —— 基于上次报告 + 偏差复盘 + 现实进展，输出校准后的新报告（结构同标准推演）"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota()
-    _request_log.append(time.time())
+    enforce_quota(x_device_id or "anonymous")
 
     comp = completeness(req.profile)
 

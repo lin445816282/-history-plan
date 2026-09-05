@@ -2,11 +2,22 @@
 // 用 vite base 动态计算，生产环境为 /history-plan/api，避免绝对路径 /api 落到根域名
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 const PROVIDER_KEY = 'hp_provider'
+const DEVICE_KEY = 'hp_device_id'
+
+// 设备隔离 ID：首次生成后持久化到 localStorage，后端据此隔离缓存与限流，避免多用户数据互相透明
+function getDeviceId() {
+  let id = localStorage.getItem(DEVICE_KEY)
+  if (!id) {
+    id = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+    localStorage.setItem(DEVICE_KEY, id)
+  }
+  return id
+}
 
 async function post(path, body) {
   const res = await fetch(API_BASE + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Device-Id': getDeviceId() },
     body: JSON.stringify(body),
   })
   if (!res.ok) {
