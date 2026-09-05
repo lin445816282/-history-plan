@@ -118,6 +118,18 @@
         </div>
       </div>
     </div>
+
+    <!-- 完整度不足提示弹窗（替代 confirm，两个明确按钮） -->
+    <div v-if="showCompleteDialog" class="complete-mask" @click.self="showCompleteDialog = false">
+      <div class="complete-dialog">
+        <h3 class="cd-title">档案完整度偏低</h3>
+        <p class="cd-text">档案完整度仅 <b>{{ score }}%</b>，低于最低可信门槛（60%）。<br />推演结果可信度将被评为「极低」，建议先补全信息。</p>
+        <div class="cd-actions">
+          <button class="btn ghost" @click="goComplete">前往补全</button>
+          <button class="btn primary" @click="proceedDeduce">仍要推演</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -146,6 +158,7 @@ const compareB = ref('')
 const comparing = ref(false)
 const compareResult = ref(null)
 const credits = ref(null)
+const showCompleteDialog = ref(false)
 
 const score = computed(() => profile.value ? completenessScore(profile.value) : 0)
 const scoreCls = computed(() => score.value < 60 ? 'low' : '')
@@ -219,18 +232,25 @@ async function runCompare() {
 }
 
 async function startDeduce() {
-  // 完整度<60% 强制引导补全（提供「前往补全」/「仍要推演」两选项）
+  // 完整度<60% 引导补全（自定义弹窗，两个明确按钮，避免 confirm 语义反直觉）
   if (score.value < 60) {
-    const go = confirm(
-      `档案完整度仅 ${score.value}%，低于最低可信门槛（60%）。\n\n` +
-      `推演结果可信度将被评为「极低」。\n\n` +
-      `点击「确定」→ 前往补全信息；点击「取消」→ 仍直接推演。`
-    )
-    if (go) {
-      viewMode.value = 'edit'
-      return
-    }
+    showCompleteDialog.value = true
+    return
   }
+  await doDeduce()
+}
+
+function goComplete() {
+  showCompleteDialog.value = false
+  viewMode.value = 'edit'
+}
+
+function proceedDeduce() {
+  showCompleteDialog.value = false
+  doDeduce()
+}
+
+async function doDeduce() {
   // 单档案 24 小时内推演超 5 次提示（软确认，不硬阻断）
   const dayAgo = Date.now() - 24 * 3600 * 1000
   const recent = snapshots.value.filter(s => new Date(s.timestamp).getTime() > dayAgo)
@@ -330,4 +350,19 @@ onMounted(load)
 .co-risk { font-size: var(--fs-small); color: var(--color-error); }
 .co-diff { font-size: var(--fs-small); color: var(--color-neutral-700); margin-bottom: var(--sp-xs); }
 .co-rec { font-size: var(--fs-body); color: var(--color-primary-700); font-weight: 600; }
+.complete-mask {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; padding: var(--sp-lg);
+}
+.complete-dialog {
+  background: #fff; border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md); padding: var(--sp-lg);
+  width: 100%; max-width: 360px;
+}
+.cd-title { font-size: var(--fs-h3); color: var(--color-primary-700); margin-bottom: var(--sp-sm); }
+.cd-text { font-size: var(--fs-body); color: var(--color-neutral-700); line-height: 1.6; margin-bottom: var(--sp-md); }
+.cd-text b { color: var(--color-warning); }
+.cd-actions { display: flex; gap: var(--sp-sm); }
+.cd-actions .btn { flex: 1; }
 </style>
