@@ -56,6 +56,7 @@ PROVIDERS = {
 }
 DEFAULT_PROVIDER = os.environ.get("HP_PROVIDER", "deepseek")
 DAILY_QUOTA = int(os.environ.get("HP_DAILY_QUOTA", "100"))
+FREE_QUOTA = int(os.environ.get("HP_FREE_QUOTA", "3"))   # 免费推演总次数（终身，用完需付费）
 
 
 def resolve_provider(provider: Optional[str]) -> str:
@@ -238,7 +239,7 @@ def hard_validate(text: str) -> Optional[str]:
 
 
 def _init_db() -> None:
-    """初始化 SQLite 用户表（仅存用户身份 + 配额元数据，不存用户档案/报告）"""
+    """初始化 SQLite 用户表（仅存用户身份 + 额度元数据，不存用户档案/报告）"""
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("""
@@ -246,8 +247,9 @@ def _init_db() -> None:
                 device_id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
                 last_active_at TEXT NOT NULL,
-                quota_date TEXT NOT NULL,
-                quota_used INTEGER NOT NULL DEFAULT 0
+                free_used INTEGER NOT NULL DEFAULT 0,
+                purchased INTEGER NOT NULL DEFAULT 0,
+                purchased_used INTEGER NOT NULL DEFAULT 0
             )
         """)
         conn.commit()
@@ -255,37 +257,64 @@ def _init_db() -> None:
         conn.close()
 
 
+def get_quota(device_id: str) -> dict:
+    """查询用户剩余次数（免费剩余 + 付费剩余 + 总计）"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT free_used, purchased, purchased_used FROM users WHERE device_id = ?", (device_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return {
+            "freeTotal": FREE_QUOTA, "freeRemaining": FREE_QUOTA,
+            "paidRemaining": 0, "totalRemaining": FREE_QUOTA,
+        }
+    free_used, purchased, purchased_used = row
+    free_remaining = max(0, FREE_QUOTA - free_used)
+    paid_remaining = max(0, purchased - purchased_used)
+    return {
+        "freeTotal": FREE_QUOTA, "freeRemaining": free_remaining,
+        "paidRemaining": paid_remaining, "totalRemaining": free_remaining + paid_remaining,
+    }
+
+
 def enforce_quota(device_id: str = "anonymous") -> None:
-    """从 SQLite 用户表读取并递增每日配额（按 deviceId 隔离，持久化，重启不重置）"""
+    """免费3次 + 付费次数 额度检查与扣减（免费额度终身固定，用完返回 402 需付费）"""
     from datetime import datetime
-    today = datetime.now().strftime("%Y-%m-%d")
     now_iso = datetime.now().isoformat(timespec="seconds")
     conn = sqlite3.connect(DB_PATH)
     try:
         row = conn.execute(
-            "SELECT quota_date, quota_used FROM users WHERE device_id = ?", (device_id,)
+            "SELECT free_used, purchased, purchased_used FROM users WHERE device_id = ?", (device_id,)
         ).fetchone()
         if row is None:
             conn.execute(
-                "INSERT INTO users (device_id, created_at, last_active_at, quota_date, quota_used) VALUES (?, ?, ?, ?, 0)",
-                (device_id, now_iso, now_iso, today),
+                "INSERT INTO users (device_id, created_at, last_active_at, free_used, purchased, purchased_used) VALUES (?, ?, ?, 0, 0, 0)",
+                (device_id, now_iso, now_iso),
             )
-            used = 0
-        elif row[0] != today:
-            conn.execute(
-                "UPDATE users SET quota_date = ?, quota_used = 0 WHERE device_id = ?", (today, device_id)
-            )
-            used = 0
+            free_used, purchased, purchased_used = 0, 0, 0
         else:
-            used = row[1]
+            free_used, purchased, purchased_used = row
 
-        if used >= DAILY_QUOTA:
-            raise HTTPException(status_code=429, detail="今日推演额度已用完，请联系管理员")
+        free_remaining = FREE_QUOTA - free_used
+        paid_remaining = purchased - purchased_used
 
-        conn.execute(
-            "UPDATE users SET quota_used = quota_used + 1, last_active_at = ? WHERE device_id = ?",
-            (now_iso, device_id),
-        )
+        if free_remaining <= 0 and paid_remaining <= 0:
+            raise HTTPException(status_code=402, detail="免费次数已用完，请购买次数后继续推演")
+
+        # 优先扣免费额度，再扣付费额度
+        if free_remaining > 0:
+            conn.execute(
+                "UPDATE users SET free_used = free_used + 1, last_active_at = ? WHERE device_id = ?",
+                (now_iso, device_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET purchased_used = purchased_used + 1, last_active_at = ? WHERE device_id = ?",
+                (now_iso, device_id),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -420,6 +449,26 @@ def health():
         "prompt_version": PROMPT_VERSION,
         "knowledge_version": KNOWLEDGE_VERSION,
     }
+
+
+@app.get("/api/credits")
+def credits(x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+    """查询当前用户剩余推演次数（免费剩余 + 付费剩余 + 总计）"""
+    return get_quota(x_device_id or "anonymous")
+
+
+@app.post("/api/orders")
+async def create_order(x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+    """创建付费订单（支付接口预留，后续接入支付宝/微信后返回支付跳转链接/二维码）"""
+    # TODO: 接入支付宝当面付 + 微信 Native 支付
+    raise HTTPException(status_code=501, detail="支付功能即将上线，敬请期待")
+
+
+@app.post("/api/payment/callback")
+async def payment_callback():
+    """支付异步回调（支付宝/微信支付接入后实现验签 + 加次数）"""
+    # TODO: 验证签名 → 确认支付成功 → 增加用户 purchased 次数
+    raise HTTPException(status_code=501, detail="支付回调未接入")
 
 
 @app.get("/api/knowledge")

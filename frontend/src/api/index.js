@@ -55,6 +55,13 @@ export const compare = (profile, optionA, optionB, customCases) => post('/compar
 // 持仓式增量再推演 —— 基于上次报告 + 偏差复盘 + 现实进展，输出校准后的新报告
 export const continueDeduce = (profile, previousReport, deviation, actualEvents) => post('/continue', { profile, previousReport, deviation, actualEvents, provider: getProvider() })
 
+// 查询当前用户剩余推演次数（免费剩余 + 付费剩余 + 总计）
+export const fetchCredits = async () => {
+  const res = await fetch(API_BASE + '/credits', { headers: { 'X-Device-Id': getDeviceId() } })
+  if (!res.ok) throw new Error('查询额度失败 ' + res.status)
+  return res.json()
+}
+
 // 健康检查
 export async function health() {
   const res = await fetch(API_BASE + '/health')

@@ -7,6 +7,7 @@
         <div class="meta">
           <span class="score" :class="scoreCls">完整度 {{ score }}%</span>
           <span class="meta-item">推演 {{ snapshots.length }} 次</span>
+          <span v-if="credits" class="meta-item" :class="{ 'quota-low': credits.totalRemaining === 0 }">🔑 剩余 {{ credits.totalRemaining }} 次</span>
           <span class="meta-item">🕐 {{ fmt(profile.updatedAt) }}</span>
         </div>
       </div>
@@ -128,7 +129,7 @@ import { FIELD_GROUPS, completenessScore } from '../constants/profile-fields.js'
 import {
   getProfile, updateProfile, duplicateProfile, deleteProfile, listSnapshots, saveSnapshot, listCustomCases,
 } from '../services/profile-service.js'
-import { deduce, compare } from '../api/index.js'
+import { deduce, compare, fetchCredits } from '../api/index.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -144,6 +145,7 @@ const compareA = ref('')
 const compareB = ref('')
 const comparing = ref(false)
 const compareResult = ref(null)
+const credits = ref(null)
 
 const score = computed(() => profile.value ? completenessScore(profile.value) : 0)
 const scoreCls = computed(() => score.value < 60 ? 'low' : '')
@@ -173,6 +175,15 @@ async function load() {
   if (!profile.value) { router.push('/profiles'); return }
   snapshots.value = await listSnapshots(profile.value.id)
   Object.assign(editForm, profile.value)
+  refreshCredits()
+}
+
+async function refreshCredits() {
+  try {
+    credits.value = await fetchCredits()
+  } catch (e) {
+    credits.value = null
+  }
 }
 
 async function saveEdit() {
@@ -245,7 +256,12 @@ async function startDeduce() {
     })
     router.push(`/report/${snapshotId}`)
   } catch (e) {
-    alert('推演失败：' + e.message)
+    if (e.message && e.message.includes('免费次数已用完')) {
+      alert('🔒 免费 3 次已用完。\n\n付费功能即将上线，敬请期待。\n如需继续使用，请联系管理员开通。')
+      refreshCredits()
+    } else {
+      alert('推演失败：' + e.message)
+    }
   } finally {
     deducing.value = false
   }
@@ -261,6 +277,7 @@ onMounted(load)
 .meta { display: flex; gap: var(--sp-md); align-items: center; font-size: var(--fs-small); color: var(--color-neutral-500); flex-wrap: wrap; }
 .score { color: var(--color-success); font-weight: 600; }
 .score.low { color: var(--color-warning); }
+.quota-low { color: var(--color-error); font-weight: 600; }
 .header-actions { display: flex; gap: var(--sp-sm); flex-wrap: wrap; }
 .btn { padding: var(--sp-sm) var(--sp-md); border: none; border-radius: var(--radius-md); font-size: var(--fs-small); min-height: var(--touch-min); }
 .btn.primary { background: var(--color-primary-500); color: #fff; }
