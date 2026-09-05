@@ -9,6 +9,7 @@ import json
 import hashlib
 import re
 import asyncio
+import sqlite3
 import statistics
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PROMPT_DIR = BASE_DIR / "prompts"
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
 FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
+DB_PATH = BASE_DIR / "history_plan.db"   # 用户配额持久化库（仅存用户身份+配额元数据，不存用户档案/报告）
 
 app = FastAPI(title="History-Plan 推演代理", version="1.7.0")
 
@@ -134,8 +136,7 @@ SENSITIVE_WORDS = [
     "建议起诉", "建议索赔", "律师函", "应诉", "法律意见书",
 ]
 
-_quota_log: dict[str, list[float]] = {}  # deviceId -> 最近24h请求时间戳（按用户隔离，非全局共享）
-_simhash_cache: dict[str, dict] = {}      # key 含 deviceId 前缀，跨用户不互相命中
+_simhash_cache: dict[str, dict] = {}      # deviceId -> {simhash_key: {ts, report}}（内存态，数据主权不落库）
 _case_stats: dict[str, int] = {}       # 案例名 -> 引用次数（内存统计，重启重置）
 _review_queue: list[dict] = []         # 软校验待审核队列（内存，最多 100 条）
 
@@ -236,14 +237,61 @@ def hard_validate(text: str) -> Optional[str]:
     return None
 
 
+def _init_db() -> None:
+    """初始化 SQLite 用户表（仅存用户身份 + 配额元数据，不存用户档案/报告）"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                device_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                last_active_at TEXT NOT NULL,
+                quota_date TEXT NOT NULL,
+                quota_used INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def enforce_quota(device_id: str = "anonymous") -> None:
-    """按 deviceId 隔离的每日配额（每用户独立 100 次，非全局共享）"""
-    now = time.time()
-    log = _quota_log.setdefault(device_id, [])
-    log[:] = [t for t in log if now - t < 86400]
-    if len(log) >= DAILY_QUOTA:
-        raise HTTPException(status_code=429, detail="今日推演额度已用完，请联系管理员")
-    log.append(now)
+    """从 SQLite 用户表读取并递增每日配额（按 deviceId 隔离，持久化，重启不重置）"""
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT quota_date, quota_used FROM users WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO users (device_id, created_at, last_active_at, quota_date, quota_used) VALUES (?, ?, ?, ?, 0)",
+                (device_id, now_iso, now_iso, today),
+            )
+            used = 0
+        elif row[0] != today:
+            conn.execute(
+                "UPDATE users SET quota_date = ?, quota_used = 0 WHERE device_id = ?", (today, device_id)
+            )
+            used = 0
+        else:
+            used = row[1]
+
+        if used >= DAILY_QUOTA:
+            raise HTTPException(status_code=429, detail="今日推演额度已用完，请联系管理员")
+
+        conn.execute(
+            "UPDATE users SET quota_used = quota_used + 1, last_active_at = ? WHERE device_id = ?",
+            (now_iso, device_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_init_db()  # 模块加载时初始化用户表
 
 
 def parse_json_safe(text: str) -> dict:
