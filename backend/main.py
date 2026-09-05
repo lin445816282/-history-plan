@@ -7,6 +7,7 @@ import os
 import time
 import json
 import hashlib
+import secrets
 import re
 import asyncio
 import sqlite3
@@ -246,13 +247,23 @@ def soft_validate(report: dict) -> list[str]:
 
 
 def record_case_references(report: dict) -> None:
-    """从报告提取被对标的历史人物名，累加引用频次统计"""
+    """从报告提取被对标的历史人物名，累加引用频次统计（持久化到 case_stats 表）"""
     bench = report.get("macroAnalysis", {}).get("historicalBenchmark", {})
     figures = bench.get("ancientFigures", []) + bench.get("modernFigures", [])
-    for fig in figures:
-        name = fig.get("name", "")
-        if name:
-            _case_stats[name] = _case_stats.get(name, 0) + 1
+    names = {fig.get("name", "") for fig in figures if fig.get("name")}
+    if not names:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        for name in names:
+            conn.execute(
+                "INSERT INTO case_stats (figure, ref_count, last_ref_at) VALUES (?, 1, ?) "
+                "ON CONFLICT(figure) DO UPDATE SET ref_count = ref_count + 1, last_ref_at = excluded.last_ref_at",
+                (name, now_iso()),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def completeness(profile: dict) -> int:
@@ -282,6 +293,21 @@ def _init_db() -> None:
                 free_used INTEGER NOT NULL DEFAULT 0,
                 purchased INTEGER NOT NULL DEFAULT 0,
                 purchased_used INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS case_stats (
+                figure TEXT PRIMARY KEY,
+                ref_count INTEGER NOT NULL DEFAULT 0,
+                last_ref_at TEXT NOT NULL DEFAULT ''
             )
         """)
         conn.commit()
@@ -353,6 +379,66 @@ def enforce_quota(device_id: str = "anonymous") -> None:
 
 
 _init_db()  # 模块加载时初始化用户表
+
+
+# ---------- 登录 / 账号体系 ----------
+_sessions: dict[str, str] = {}   # token -> username（内存态，重启需重新登录）
+
+
+def _hash_password(password: str, salt_hex: str = "") -> tuple[str, str]:
+    """pbkdf2_hmac 加密，返回 (hash_hex, salt_hex)"""
+    salt = salt_hex or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 100_000).hex()
+    return h, salt
+
+
+def _issue_token(username: str) -> str:
+    token = secrets.token_hex(32)
+    _sessions[token] = username
+    return token
+
+
+def register_account(username: str, password: str) -> dict:
+    """注册账号，返回 {token, username}"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        exists = conn.execute("SELECT 1 FROM accounts WHERE username = ?", (username,)).fetchone()
+        if exists:
+            raise HTTPException(status_code=409, detail="用户名已存在")
+        h, salt = _hash_password(password)
+        conn.execute(
+            "INSERT INTO accounts (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
+            (username, h, salt, now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"token": _issue_token(username), "username": username}
+
+
+def login_account(username: str, password: str) -> dict:
+    """登录账号，返回 {token, username}"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute("SELECT password_hash, salt FROM accounts WHERE username = ?", (username,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    h, _ = _hash_password(password, row[1])
+    if not secrets.compare_digest(h, row[0]):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return {"token": _issue_token(username), "username": username}
+
+
+def resolve_identity(x_device_id: Optional[str], x_auth_token: Optional[str]) -> tuple[str, Optional[str]]:
+    """解析身份键：(identity_key, username_or_None)。
+    登录：identity = 'u:' + username；匿名：identity = device_id 或 anonymous。"""
+    if x_auth_token:
+        username = _sessions.get(x_auth_token)
+        if username:
+            return "u:" + username, username
+    return x_device_id or "anonymous", None
 
 
 def parse_json_safe(text: str) -> dict:
@@ -478,6 +564,11 @@ class ContinueRequest(BaseModel):
     customCases: list[dict] = Field(default_factory=list)
 
 
+class AuthRequest(BaseModel):
+    username: str = Field(..., min_length=2, max_length=32)
+    password: str = Field(..., min_length=4, max_length=64)
+
+
 # ---------- 端点 ----------
 @app.get("/api/health")
 def health():
@@ -493,10 +584,43 @@ def health():
     }
 
 
+@app.post("/api/auth/register")
+def auth_register(req: AuthRequest):
+    """注册账号：用户名 + 密码"""
+    username = req.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+    return register_account(username, req.password)
+
+
+@app.post("/api/auth/login")
+def auth_login(req: AuthRequest):
+    """登录账号：返回 token"""
+    return login_account(req.username.strip(), req.password)
+
+
+@app.post("/api/auth/logout")
+def auth_logout(x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token")):
+    """登出：作废 token"""
+    if x_auth_token:
+        _sessions.pop(x_auth_token, None)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token"),
+            x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+    """查询当前登录状态：返回 username + 额度"""
+    identity, username = resolve_identity(x_device_id, x_auth_token)
+    return {"authenticated": username is not None, "username": username, "credits": get_quota(identity)}
+
+
 @app.get("/api/credits")
-def credits(x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+def credits(x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+            x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token")):
     """查询当前用户剩余推演次数（免费剩余 + 付费剩余 + 总计）"""
-    return get_quota(x_device_id or "anonymous")
+    identity, _ = resolve_identity(x_device_id, x_auth_token)
+    return get_quota(identity)
 
 
 @app.post("/api/orders")
@@ -541,20 +665,21 @@ async def parse(req: ParseRequest):
 
 
 @app.post("/api/deduce")
-async def deduce(req: DeduceRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+async def deduce(req: DeduceRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                 x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token")):
     """档案 + 知识上下文 → 推演报告（推演 Prompt，JSON mode + 双层校验 + 一致性系数）"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota(x_device_id or "anonymous")
+    identity, _ = resolve_identity(x_device_id, x_auth_token)
+    enforce_quota(identity)
 
     comp = completeness(req.profile)
 
     # 相似档案 SimHash 缓存复用（完整度>80% 且命中近期相似档案时直接返回）
-    device_id = x_device_id or "anonymous"
     if comp > 80:
         simhash_key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
-        cached = find_similar_cached(device_id, simhash_key)
+        cached = find_similar_cached(identity, simhash_key)
         if cached:
             reused = json.loads(json.dumps(cached["report"], ensure_ascii=False))
             reused.setdefault("meta", {})["reusedFromSimilar"] = True
@@ -649,12 +774,13 @@ async def deduce(req: DeduceRequest, x_device_id: Optional[str] = Header(None, a
 
 
 @app.post("/api/recalc")
-async def recalc(req: RecalcRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+async def recalc(req: RecalcRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                 x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token")):
     """参数微调·快速重算 —— 复用原推演上下文，仅增量更新受影响的路径评分与风险提示"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota(x_device_id or "anonymous")
+    enforce_quota(resolve_identity(x_device_id, x_auth_token)[0])
 
     if not req.adjustments:
         raise HTTPException(status_code=400, detail="请至少调整一个变量后再重算")
@@ -709,12 +835,13 @@ async def recalc(req: RecalcRequest, x_device_id: Optional[str] = Header(None, a
 
 
 @app.post("/api/deviation")
-async def deviation(req: DeviationRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+async def deviation(req: DeviationRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                    x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token")):
     """推演偏差自检 —— 对比三条预测与现实情况，LLM 输出准确项/偏差项/原因"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota(x_device_id or "anonymous")
+    enforce_quota(resolve_identity(x_device_id, x_auth_token)[0])
 
     prompt = load_prompt("deviation_prompt_v2.txt")
     user_content = json.dumps(
@@ -738,12 +865,13 @@ async def deviation(req: DeviationRequest, x_device_id: Optional[str] = Header(N
 
 
 @app.post("/api/compare")
-async def compare(req: CompareRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+async def compare(req: CompareRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                  x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token")):
     """二选一专项对比推演 —— 对比两个选项的可行性/得失/风险，给出推荐"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota(x_device_id or "anonymous")
+    enforce_quota(resolve_identity(x_device_id, x_auth_token)[0])
 
     prompt = load_prompt("compare_prompt_v2.txt")
     knowledge = load_knowledge()
@@ -782,12 +910,13 @@ async def compare(req: CompareRequest, x_device_id: Optional[str] = Header(None,
 
 
 @app.post("/api/continue")
-async def continue_deduce(req: ContinueRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id")):
+async def continue_deduce(req: ContinueRequest, x_device_id: Optional[str] = Header(None, alias="X-Device-Id"),
+                          x_auth_token: Optional[str] = Header(None, alias="X-Auth-Token")):
     """持仓式增量再推演 —— 基于上次报告 + 偏差复盘 + 现实进展，输出校准后的新报告（结构同标准推演）"""
     provider = resolve_provider(req.provider)
     if not PROVIDERS[provider]["api_key"]:
         raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
-    enforce_quota(x_device_id or "anonymous")
+    enforce_quota(resolve_identity(x_device_id, x_auth_token)[0])
 
     comp = completeness(req.profile)
 

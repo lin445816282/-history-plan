@@ -1,8 +1,35 @@
 // 后端薄代理 API client
 // 用 vite base 动态计算，生产环境为 /history-plan/api，避免绝对路径 /api 落到根域名
+import { reactive } from 'vue'
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api'
 const PROVIDER_KEY = 'hp_provider'
 const DEVICE_KEY = 'hp_device_id'
+const TOKEN_KEY = 'hp_token'
+const USER_KEY = 'hp_username'
+
+// 登录态（响应式，供导航栏/页面实时联动）
+export const authState = reactive({
+  token: localStorage.getItem(TOKEN_KEY) || '',
+  username: localStorage.getItem(USER_KEY) || '',
+})
+
+function getToken() {
+  return authState.token || localStorage.getItem(TOKEN_KEY) || ''
+}
+
+export function setAuth(token, username) {
+  authState.token = token
+  authState.username = username
+  localStorage.setItem(TOKEN_KEY, token)
+  localStorage.setItem(USER_KEY, username)
+}
+
+export function clearAuth() {
+  authState.token = ''
+  authState.username = ''
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
 
 // 设备隔离 ID：首次生成后持久化到 localStorage，后端据此隔离缓存与限流，避免多用户数据互相透明
 function getDeviceId() {
@@ -14,10 +41,17 @@ function getDeviceId() {
   return id
 }
 
+function authHeaders(extra = {}) {
+  const h = { 'X-Device-Id': getDeviceId(), ...extra }
+  const t = getToken()
+  if (t) h['X-Auth-Token'] = t
+  return h
+}
+
 async function post(path, body) {
   const res = await fetch(API_BASE + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Device-Id': getDeviceId() },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
   })
   if (!res.ok) {
@@ -57,8 +91,28 @@ export const continueDeduce = (profile, previousReport, deviation, actualEvents)
 
 // 查询当前用户剩余推演次数（免费剩余 + 付费剩余 + 总计）
 export const fetchCredits = async () => {
-  const res = await fetch(API_BASE + '/credits', { headers: { 'X-Device-Id': getDeviceId() } })
+  const res = await fetch(API_BASE + '/credits', { headers: authHeaders() })
   if (!res.ok) throw new Error('查询额度失败 ' + res.status)
+  return res.json()
+}
+
+// 注册账号
+export const register = (username, password) => post('/auth/register', { username, password })
+
+// 登录账号
+export const login = (username, password) => post('/auth/login', { username, password })
+
+// 登出
+export const logout = async () => {
+  const res = await fetch(API_BASE + '/auth/logout', { method: 'POST', headers: authHeaders() })
+  if (!res.ok) throw new Error('登出失败 ' + res.status)
+  return res.json()
+}
+
+// 查询当前登录状态
+export const fetchMe = async () => {
+  const res = await fetch(API_BASE + '/auth/me', { headers: authHeaders() })
+  if (!res.ok) throw new Error('查询登录状态失败 ' + res.status)
   return res.json()
 }
 

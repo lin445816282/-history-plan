@@ -6,6 +6,11 @@
       <router-link to="/knowledge" class="nav-link">知识库</router-link>
       <router-link to="/deviation" class="nav-link">偏差总览</router-link>
       <router-link to="/settings" class="nav-link">设置</router-link>
+      <template v-if="authState.username">
+        <span class="user-badge" :title="authState.username">{{ authState.username }}</span>
+        <button class="logout-btn" @click="doLogout">登出</button>
+      </template>
+      <router-link v-else to="/login" class="nav-link login-link">登录</router-link>
     </header>
     <main class="content">
       <router-view />
@@ -15,6 +20,19 @@
     </footer>
   </div>
 </template>
+
+<script setup>
+import { authState, logout, clearAuth } from './api/index.js'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+
+async function doLogout() {
+  try { await logout() } catch (_) {}
+  clearAuth()
+  router.push('/profiles')
+}
+</script>
 
 <style scoped>
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
@@ -27,6 +45,10 @@
 .brand { font-size: var(--fs-h3); font-weight: 700; color: #fff; }
 .motto { color: var(--color-primary-100); font-size: var(--fs-small); flex: 1; }
 .nav-link { color: #fff; font-size: var(--fs-small); }
+.user-badge { font-size: var(--fs-caption); color: var(--color-primary-100); padding: 2px 8px; border: 1px solid var(--color-primary-300); border-radius: 12px; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logout-btn { background: transparent; border: 1px solid rgba(255,255,255,0.4); color: #fff; font-size: var(--fs-caption); padding: 2px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+.logout-btn:hover { background: rgba(255,255,255,0.15); }
+.login-link { font-weight: 600; }
 .content { flex: 1; max-width: 960px; width: 100%; margin: 0 auto; padding: var(--sp-lg); }
 .global-footer { text-align: center; padding: var(--sp-lg); color: var(--color-neutral-500); font-size: var(--fs-caption); }
 

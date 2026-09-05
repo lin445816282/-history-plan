@@ -11,6 +11,7 @@ const routes = [
   { path: '/deviation', component: () => import('../views/DeviationDashboard.vue') },
   { path: '/knowledge', component: () => import('../views/KnowledgeBase.vue') },
   { path: '/settings', component: () => import('../views/Settings.vue') },
+  { path: '/login', component: () => import('../views/Login.vue') },
 ]
 
 export default createRouter({ history: createWebHashHistory(), routes })
