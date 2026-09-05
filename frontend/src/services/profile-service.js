@@ -206,6 +206,31 @@ export async function getGrowthData(profileId) {
   }
 }
 
+// ---------- 路径评分轨迹（持仓式演算的 K 线可视化） ----------
+export async function getPathTrajectory(profileId) {
+  const snapshots = await db.getByIndex('snapshots', 'by_profileId', profileId)
+  // 升序（时间从左到右）
+  snapshots.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')))
+
+  const pathMap = {}  // pathName -> [{ timestamp, score }]
+  const timePoints = snapshots.map(s => ({ id: s.id, timestamp: s.timestamp }))
+  snapshots.forEach(s => {
+    const paths = s.fullReport?.paths || []
+    paths.forEach(p => {
+      const name = p.name || '未命名路径'
+      const score = typeof p.score === 'number' ? p.score : null
+      if (!pathMap[name]) pathMap[name] = []
+      pathMap[name].push({ snapshotId: s.id, timestamp: s.timestamp, score })
+    })
+  })
+
+  const paths = Object.entries(pathMap)
+    .map(([name, points]) => ({ name, points }))
+    .filter(p => p.points.some(pt => pt.score != null))
+
+  return { timePoints, paths }
+}
+
 // ---------- 备份 ----------
 export const exportAllData = () => db.exportAllData()
 export const importAllData = (data) => db.importAllData(data)
@@ -214,5 +239,5 @@ export default {
   listProfiles, getProfile, createProfile, updateProfile, duplicateProfile, deleteProfile,
   listSnapshots, getSnapshot, saveSnapshot,
   listTodos, saveTodo, updateTodo, deleteTodo,
-  listReviews, saveReview, getDeviationSummary, getGrowthData, exportAllData, importAllData,
+  listReviews, saveReview, getDeviationSummary, getGrowthData, getPathTrajectory, exportAllData, importAllData,
 }

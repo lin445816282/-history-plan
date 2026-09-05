@@ -46,6 +46,26 @@
         </div>
       </div>
 
+      <!-- 路径评分轨迹 -->
+      <div v-if="trajPaths.length && trajectory.timePoints.length >= 2" class="block">
+        <h3>路径评分轨迹</h3>
+        <p class="hint">各发展路径评分随多次推演/再推演的演变，反映持仓式演算的校准过程。</p>
+        <div class="legend">
+          <span v-for="p in trajPaths" :key="p.name" class="lg">
+            <i class="dot" :style="{ background: p.color }"></i>{{ p.name }}
+          </span>
+        </div>
+        <svg :viewBox="trajViewBox" class="traj-svg" preserveAspectRatio="xMidYMid meet">
+          <line v-for="g in [0, 2, 4, 6, 8, 10]" :key="'grid' + g" :x1="PLOT_LEFT" :x2="PLOT_LEFT + PLOT_W" :y1="PLOT_TOP + (10 - g) / 10 * PLOT_H" :y2="PLOT_TOP + (10 - g) / 10 * PLOT_H" class="grid" />
+          <text v-for="g in [0, 2, 4, 6, 8, 10]" :key="'yt' + g" :x="PLOT_LEFT - 8" :y="PLOT_TOP + (10 - g) / 10 * PLOT_H + 4" class="axis-text" text-anchor="end">{{ g }}</text>
+          <text v-for="(l, i) in trajXLabels" :key="'xt' + i" :x="l.x" :y="PLOT_TOP + PLOT_H + 20" class="axis-text" text-anchor="middle">{{ l.label }}</text>
+          <polyline v-for="p in trajPaths" :key="p.name" :points="p.pointsStr" :stroke="p.color" class="traj-line" />
+          <circle v-for="d in trajDots" :key="d.name + '-' + d.timestamp" :cx="d.x" :cy="d.y" :fill="d.color" r="3.5">
+            <title>{{ d.name }} · {{ fmt(d.timestamp) }} · {{ d.score ?? '—' }}分</title>
+          </circle>
+        </svg>
+      </div>
+
       <!-- 成长洞察 -->
       <div class="block insight">
         <h3>成长洞察</h3>
@@ -57,6 +77,8 @@
           <span v-else>持平，推演稳定性良好。</span>
         </p>
         <p v-if="data.todoTotal" class="insight-sub">行动落地：{{ data.todoDone }}/{{ data.todoTotal }} 项待办已完成。</p>
+        <p class="insight-sub">📊 可信度：<b>{{ credibilityLevel.level }}</b> — {{ credibilityLevel.note }}</p>
+        <p v-if="decliningAlert" class="insight-alert">⚠️ {{ decliningAlert }}</p>
       </div>
 
       <!-- 复盘时间线 -->
@@ -78,19 +100,29 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { getProfile, getGrowthData } from '../services/profile-service.js'
+import { getProfile, getGrowthData, getPathTrajectory } from '../services/profile-service.js'
 
 const route = useRoute()
 const profile = ref(null)
 const data = ref(null)
+const trajectory = ref(null)
+
+const PATH_COLORS = ['#2D7D46', '#B33A3A', '#4A6A8B', '#D48C2B', '#7A5C8F', '#2B7A78', '#C98A4B']
 
 function fmt(iso) {
   if (!iso) return '—'
   const d = new Date(iso)
   const p = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+function fmtShort(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const p = n => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
 function rateColor(rate) {
@@ -100,10 +132,60 @@ function rateColor(rate) {
   return '#B33A3A'
 }
 
+// ---------- 路径评分轨迹 SVG ----------
+const PLOT_LEFT = 46, PLOT_RIGHT = 14, PLOT_TOP = 16, PLOT_BOTTOM = 36, PLOT_W = 540, PLOT_H = 210
+
+const trajPaths = computed(() => {
+  if (!trajectory.value || !trajectory.value.timePoints.length) return []
+  const n = trajectory.value.timePoints.length
+  return trajectory.value.paths.map((p, i) => {
+    const color = PATH_COLORS[i % PATH_COLORS.length]
+    const pts = p.points.map((pt, j) => {
+      const x = PLOT_LEFT + (n <= 1 ? PLOT_W / 2 : (j / (n - 1)) * PLOT_W)
+      const y = PLOT_TOP + (pt.score == null ? PLOT_H : ((10 - pt.score) / 10) * PLOT_H)
+      return { x, y, score: pt.score, timestamp: pt.timestamp }
+    })
+    return { name: p.name, color, pts, pointsStr: pts.map(pt => `${pt.x},${pt.y}`).join(' ') }
+  })
+})
+
+const trajDots = computed(() => trajPaths.value.flatMap(p => p.pts.map(pt => ({ ...pt, color: p.color, name: p.name }))))
+
+const trajXLabels = computed(() => {
+  if (!trajectory.value) return []
+  const n = trajectory.value.timePoints.length
+  return trajectory.value.timePoints.map((t, i) => ({
+    x: PLOT_LEFT + (n <= 1 ? PLOT_W / 2 : (i / (n - 1)) * PLOT_W),
+    label: fmtShort(t.timestamp),
+  }))
+})
+
+const trajViewBox = computed(() => `0 0 ${PLOT_LEFT + PLOT_W + PLOT_RIGHT} ${PLOT_TOP + PLOT_H + PLOT_BOTTOM}`)
+
+// ---------- 可信度升级 + 阈值触发 ----------
+const credibilityLevel = computed(() => {
+  const n = data.value?.totalReviews || 0
+  const rate = data.value?.latestRate
+  if (n >= 3 && rate != null && rate >= 70) return { level: '高', note: `经 ${n} 次复盘验证，准确率稳定在 ${rate}%` }
+  if (n >= 2) return { level: '中', note: `经 ${n} 次复盘，持续校准中` }
+  if (n >= 1) return { level: '中', note: '已进行 1 次复盘，可信度开始建立' }
+  return { level: '初评', note: '尚未复盘，可信度为模型初评' }
+})
+
+const decliningAlert = computed(() => {
+  const pts = (data.value?.points || []).filter(p => p.rate != null)
+  if (pts.length < 2) return null
+  const last = pts[pts.length - 1].rate
+  const prev = pts[pts.length - 2].rate
+  if (last < prev) return `最近准确率 ${prev}% → ${last}% 下降，建议回到报告页「再推演」重新校准。`
+  return null
+})
+
 onMounted(async () => {
   profile.value = await getProfile(Number(route.params.id))
   if (!profile.value) return
   data.value = await getGrowthData(Number(route.params.id))
+  trajectory.value = await getPathTrajectory(Number(route.params.id))
 })
 </script>
 
@@ -143,6 +225,7 @@ onMounted(async () => {
 .insight-text .up { color: var(--color-success); font-weight: 600; }
 .insight-text .down { color: var(--color-error); font-weight: 600; }
 .insight-sub { margin-top: var(--sp-sm); font-size: var(--fs-small); color: var(--color-neutral-500); }
+.insight-alert { margin-top: var(--sp-sm); font-size: var(--fs-small); color: var(--color-error); background: #F9E6E6; padding: var(--sp-sm) var(--sp-md); border-radius: var(--radius-md); }
 
 .timeline-item { display: flex; gap: var(--sp-md); padding: var(--sp-sm) 0; border-bottom: 1px solid var(--color-neutral-100); }
 .timeline-item:last-child { border-bottom: none; }
@@ -152,4 +235,10 @@ onMounted(async () => {
 .tl-stat { font-size: var(--fs-small); color: var(--color-neutral-700); margin-bottom: 2px; }
 .tl-reasons { display: flex; gap: var(--sp-xs); flex-wrap: wrap; }
 .tag { font-size: var(--fs-caption); padding: 1px 8px; border-radius: 10px; background: #F9E6E6; color: var(--color-error); }
+
+/* 路径评分轨迹 */
+.traj-svg { width: 100%; height: auto; display: block; }
+.traj-line { fill: none; stroke-width: 2; }
+.grid { stroke: #EDEDED; stroke-width: 1; }
+.axis-text { font-size: 11px; fill: var(--color-neutral-500); }
 </style>
