@@ -123,7 +123,7 @@
     <div v-if="showCompleteDialog" class="complete-mask" @click.self="showCompleteDialog = false">
       <div class="complete-dialog">
         <h3 class="cd-title">档案完整度偏低</h3>
-        <p class="cd-text">档案完整度仅 <b>{{ score }}%</b>，低于最低可信门槛（60%）。<br />推演结果可信度将被评为「极低」，建议先补全信息。</p>
+        <p class="cd-text">档案完整度仅 <b>{{ score }}%</b>，信息严重不足。<br />推演结果可信度将被评为「极低」，建议先补全信息。</p>
         <div class="cd-actions">
           <button class="btn ghost" @click="goComplete">前往补全</button>
           <button class="btn primary" @click="proceedDeduce">仍要推演</button>
@@ -232,8 +232,8 @@ async function runCompare() {
 }
 
 async function startDeduce() {
-  // 完整度<60% 引导补全（自定义弹窗，两个明确按钮，避免 confirm 语义反直觉）
-  if (score.value < 60) {
+  // 完整度<35% 引导补全（自定义弹窗，两个明确按钮，避免 confirm 语义反直觉）
+  if (score.value < 35) {
     showCompleteDialog.value = true
     return
   }
