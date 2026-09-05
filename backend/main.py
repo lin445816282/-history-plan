@@ -57,7 +57,7 @@ PROVIDERS = {
 }
 DEFAULT_PROVIDER = os.environ.get("HP_PROVIDER", "deepseek")
 DAILY_QUOTA = int(os.environ.get("HP_DAILY_QUOTA", "100"))
-FREE_QUOTA = int(os.environ.get("HP_FREE_QUOTA", "3"))   # 免费推演总次数（终身，用完需付费）
+FREE_QUOTA = int(os.environ.get("HP_FREE_QUOTA", "20"))   # 免费推演总次数（终身，用完需付费）
 
 
 def resolve_provider(provider: Optional[str]) -> str:
@@ -339,7 +339,7 @@ def get_quota(device_id: str) -> dict:
 
 
 def enforce_quota(device_id: str = "anonymous") -> None:
-    """免费3次 + 付费次数 额度检查与扣减（免费额度终身固定，用完返回 402 需付费）"""
+    """免费额度 + 付费次数 额度检查与扣减（免费额度终身固定，用完返回 402 需付费）"""
     from datetime import datetime
     now_iso = datetime.now().isoformat(timespec="seconds")
     conn = sqlite3.connect(DB_PATH)

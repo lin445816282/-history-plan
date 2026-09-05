@@ -277,7 +277,7 @@ async function doDeduce() {
     router.push(`/report/${snapshotId}`)
   } catch (e) {
     if (e.message && e.message.includes('免费次数已用完')) {
-      alert('🔒 免费 3 次已用完。\n\n付费功能即将上线，敬请期待。\n如需继续使用，请联系管理员开通。')
+      alert('🔒 免费 20 次已用完。\n\n付费功能即将上线，敬请期待。\n如需继续使用，请联系管理员开通。')
       refreshCredits()
     } else {
       alert('推演失败：' + e.message)

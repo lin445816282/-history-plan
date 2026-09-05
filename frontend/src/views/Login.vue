@@ -18,7 +18,7 @@
         <p v-if="error" class="error">{{ error }}</p>
       </div>
 
-      <p class="hint">未登录也可直接使用，免费额度 3 次（与当前设备绑定）。登录后额度跟账号走。</p>
+      <p class="hint">未登录也可直接使用，免费额度 20 次（与当前设备绑定）。登录后额度跟账号走。</p>
     </div>
   </div>
 </template>
