@@ -76,6 +76,7 @@ PROMPT_VERSION = "p-" + _content_version([
     PROMPT_DIR / "consistency_prompt_v1.7.txt",
     PROMPT_DIR / "deviation_prompt_v2.txt",
     PROMPT_DIR / "compare_prompt_v2.txt",
+    PROMPT_DIR / "continue_prompt_v1.txt",
 ])
 KNOWLEDGE_VERSION = "k-" + _content_version([KNOWLEDGE_DIR / "cases.json"])
 
@@ -341,6 +342,16 @@ class CompareRequest(BaseModel):
     profile: dict = Field(...)
     optionA: str = Field(..., min_length=1)
     optionB: str = Field(..., min_length=1)
+    provider: Optional[str] = None
+    customCases: list[dict] = Field(default_factory=list)
+
+
+class ContinueRequest(BaseModel):
+    profile: dict = Field(...)
+    previousReport: dict = Field(default_factory=dict)
+    deviation: dict = Field(default_factory=dict)
+    actualEvents: str = Field(default="")
+    industry: Optional[str] = None
     provider: Optional[str] = None
     customCases: list[dict] = Field(default_factory=list)
 
@@ -625,6 +636,92 @@ async def compare(req: CompareRequest):
     result.setdefault("recommendation", "")
     result.setdefault("keyDifference", "")
     return result
+
+
+@app.post("/api/continue")
+async def continue_deduce(req: ContinueRequest):
+    """持仓式增量再推演 —— 基于上次报告 + 偏差复盘 + 现实进展，输出校准后的新报告（结构同标准推演）"""
+    provider = resolve_provider(req.provider)
+    if not PROVIDERS[provider]["api_key"]:
+        raise HTTPException(status_code=503, detail=f"{PROVIDERS[provider]['name']} API Key 未配置")
+    enforce_quota()
+    _request_log.append(time.time())
+
+    comp = completeness(req.profile)
+
+    # 三级漏斗过滤知识库
+    industry = req.industry or detect_industry(req.profile)
+    builtin_cases = load_knowledge().get("cases", [])
+    filtered_cases, funnel_stats = funnel.funnel_cases(req.profile, industry, builtin_cases)
+    combined_cases = list(req.customCases) + filtered_cases
+
+    # 两条 system 消息：标准报告结构 + 校准语义
+    user_content = json.dumps(
+        {
+            "人物档案": req.profile,
+            "行业标签": industry,
+            "历史知识库上下文": combined_cases,
+            "上次推演报告": req.previousReport,
+            "偏差复盘结果": req.deviation,
+            "现实进展": req.actualEvents,
+        },
+        ensure_ascii=False,
+    )
+    messages = [
+        {"role": "system", "content": load_prompt("system_prompt_v1.7.txt")},
+        {"role": "system", "content": load_prompt("continue_prompt_v1.txt")},
+        {"role": "user", "content": user_content},
+    ]
+
+    raw = await call_llm(messages, temperature=0.6, provider=provider)
+
+    # 第一层硬拦截
+    block = hard_validate(raw)
+    if block:
+        raise HTTPException(status_code=400, detail=block)
+
+    try:
+        report = parse_json_safe(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="校准推演结果格式异常，请重试")
+
+    # 第二层软校验
+    soft_warnings = soft_validate(report)
+    if soft_warnings:
+        _review_queue.append({
+            "ts": time.time(),
+            "reportId": report.get("reportId", ""),
+            "profileName": req.profile.get("name", ""),
+            "warnings": soft_warnings,
+        })
+        _review_queue[:] = _review_queue[-100:]
+
+    # 3 次低温并行一致性系数
+    consistency = "中"
+    if comp >= 70 and report.get("paths"):
+        consistency = await run_consistency(req.profile, report["paths"], provider=provider)
+
+    # 注入元信息
+    if "meta" not in report:
+        report["meta"] = {}
+    report["meta"].update({
+        "knowledgeVersion": KNOWLEDGE_VERSION,
+        "promptVersion": PROMPT_VERSION,
+        "modelVersion": PROVIDERS[provider]["model"],
+        "completenessScore": comp,
+        "consistencyCoefficient": consistency,
+        "detectedIndustry": industry,
+        "softCheckWarnings": soft_warnings,
+        "funnelStats": funnel_stats,
+        "continueFrom": req.previousReport.get("reportId", ""),
+    })
+
+    # 后端权威覆盖 reportId/timestamp
+    report["reportId"] = gen_report_id()
+    report["timestamp"] = now_iso()
+
+    record_case_references(report)
+    return report
 
 
 # ---------- 前端静态托管（Vue3 SPA，hash 路由） ----------
