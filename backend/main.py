@@ -765,7 +765,7 @@ async def deduce(req: DeduceRequest, x_device_id: Optional[str] = Header(None, a
     # 相似档案 SimHash 缓存（完整度>80% 才存储，按 deviceId 隔离）
     if comp > 80:
         simhash_key = simhash(json.dumps(req.profile, ensure_ascii=False, sort_keys=True))
-        _simhash_cache.setdefault(device_id, {})[simhash_key] = {"ts": time.time(), "report": report}
+        _simhash_cache.setdefault(identity, {})[simhash_key] = {"ts": time.time(), "report": report}
 
     # 案例引用频次统计
     record_case_references(report)
